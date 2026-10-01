@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="512" height="512" role="img" aria-label="WinPlay 老式显示器图标">
+ <rect width="108" height="108" rx="24" fill="#0C111B"/>
+ <g fill="none" stroke="#A6C8FF" stroke-width="4" stroke-linecap="round"><path d="M42 22Q54 12 66 22M48 28Q54 23 60 28"/></g>
+ <rect x="22" y="35" width="64" height="45" rx="10" fill="#A6C8FF"/>
+ <rect x="27" y="40" width="54" height="31" rx="5" fill="#101C30"/>
+ <path d="M48 80H60V87H72Q76 87 76 91H32Q32 87 36 87H48Z" fill="#A6C8FF"/>
+ <g fill="#A6C8FF"><rect x="34" y="47" width="9" height="8" rx="1"/><rect x="45" y="47" width="9" height="8" rx="1"/><rect x="34" y="57" width="9" height="8" rx="1"/><rect x="45" y="57" width="9" height="8" rx="1"/></g>
+ <path d="M62 46L75 56L62 66Z" fill="#F4F8FF"/>
+ <circle cx="76" cy="75" r="1.5" fill="#0C111B"/>
+</svg>

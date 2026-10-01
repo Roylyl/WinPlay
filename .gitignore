@@ -1,0 +1,46 @@
+# Dependencies and downloaded development tools
+/node_modules/
+/tools/
+/resources/node/
+
+# Generated build and release files
+/build/
+/dist/
+/coverage/
+/README.preview.html
+*.tsbuildinfo
+*.log
+*.blockmap
+
+# Generated validation output; retain the record referenced by the README
+/docs/validation/*
+!/docs/validation/phone-video-20261002.json
+
+# Authentication material and private keys
+/resources/authentication/
+*.pk8
+*.p7b
+*.pem
+*.key
+*.p12
+*.pfx
+*.dpapi
+
+# Local credentials, settings and pairing records
+.env
+.env.*
+!.env.example
+settings.json
+identity.json
+pairings.json
+diagnostics.json
+
+# Crash dumps, temporary files and editor/OS metadata
+*.dmp
+*.tmp
+*.bak
+/.codex/
+/.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini

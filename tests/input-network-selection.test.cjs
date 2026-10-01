@@ -1,0 +1,5 @@
+const test=require('node:test'),assert=require('node:assert/strict');
+const {wheelDelta}=require('../src/ui/geometry');
+const {candidates}=require('../src/network-selection.cjs');
+test('wheel movement stays slower and constant in physical pixels across DPI',()=>{for(const dpi of [1,1.5,2]){const step=wheelDelta(120,120,0,1280/dpi,720/dpi,dpi);assert.equal(step.x,24/1280);assert.equal(step.y,24/720)}assert.ok(Math.abs(wheelDelta(0,3,1,1280,720).y-9.6/720)<1e-12)});
+test('hotspot private interface and LAN remain distinct, VPN is not recommended',()=>{const addresses={WLAN:[{family:'IPv6',address:'fe80::1'}],Hotspot:[{family:'IPv4',address:'192.168.137.1'}],VPN:[{family:'IPv4',address:'10.0.0.1'}]};const result=candidates(addresses,[{name:'WLAN',description:'Intel Wi-Fi',physical:true},{name:'Hotspot',description:'Microsoft Wi-Fi Direct Virtual Adapter',physical:false},{name:'VPN',description:'VPN Tunnel',physical:true}],['Hotspot']);assert.equal(result.find(n=>n.name==='Hotspot').activeHotspot,true);assert.equal(result.find(n=>n.name==='WLAN').lan,true);assert.equal(result.find(n=>n.name==='VPN').lan,false)});

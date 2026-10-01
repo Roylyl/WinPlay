@@ -1,0 +1,1164 @@
+/**
+ * CpStack — the CarPlay network session engine, ported from Roylyl/MacPlay.
+ *
+ * WinPlay binds TCP17000. Implements pairing, authentication, encrypted
+ * RTSP control, network media negotiation and HID input. Platform media and
+ * iAP2 transport are supplied by the Windows adapters.
+ */
+
+import { EventEmitter } from 'node:events'
+import net from 'node:net'
+import { DEBUG } from '../constants'
+import {
+  closeAudioReceiver,
+  closeMicUplink,
+  onAudioReceiverStarted,
+  openAudioReceiver,
+  openMicUplink,
+  setAudioReceiverActive,
+  setAudioReceiverVolume
+} from '../media'
+import type { CpAudioCodec } from '../media'
+import { openIapRelay } from '../relay'
+import { handleAuthSetup } from './authSetup'
+import { decodeBplist, encodeBplist, type PlistValue } from './bplist'
+import { ControlCipher } from './controlCipher'
+import { hkdfSha512 } from './crypto'
+import { ALT_UUID, buildInfoPlist, MAIN_UUID } from './getInfo'
+import {
+  KNOB_HID_UID,
+  type KnobState,
+  knobReport,
+  MEDIA_HID_UID,
+  mediaReport,
+  TELEPHONY_HID_UID,
+  TOUCH_HID_UID,
+  telephonyReport,
+  touchReport
+} from './hid'
+import { IapTunnel } from './iapTunnel'
+import { KeepAliveServer } from './keepAliveServer'
+import type { MfiSigner } from './mfiSigner'
+import { ntp64Now } from './ntp'
+import { PairSetup } from './pairSetup'
+import { PairVerify } from './pairVerify'
+import { buildResponse, parseMessages, type RtspRequest, type RtspResponse } from './rtspMessage'
+import { ScreenStream } from './screenStream'
+import { TimingSync } from './timingServer'
+import type { CpAudioProfile, CpStackConfig, CpStreamProfile } from './types'
+
+const STREAM_TYPE_MAIN_SCREEN = 110
+const STREAM_TYPE_ALT_SCREEN = 111
+const STREAM_TYPE_MAIN_AUDIO = 100
+const STREAM_TYPE_ALT_AUDIO = 101
+const STREAM_TYPE_MAIN_HIGH_AUDIO = 102
+
+// The CarPlay URL rendered on the instrument-cluster (alt) screen.
+const CLUSTER_MAP_URL = 'maps:/car/instrumentcluster/map'
+
+// AAC-LC audioFormat bits (kAirPlayAudioFormat_*): 44.1k / 48k stereo.
+const AAC_LC_44K_STEREO = 0x400000
+const AAC_LC_48K_STEREO = 0x800000
+// OPUS mono audioFormat bits: 16k / 24k / 48k (low-latency nav/alert/Siri).
+const OPUS_MONO = 0x10000000 | 0x20000000 | 0x40000000
+// Shared LPCM audioFormat mapping retained for protocol compatibility.
+// Wireless sessions normally negotiate compressed audio; decoded PCM is
+// resampled to the configured sink rate.
+const PCM_FORMAT: Record<number, { rate: number; channels: number }> = {
+  0x4: { rate: 8000, channels: 1 },
+  0x8: { rate: 8000, channels: 2 },
+  0x10: { rate: 16000, channels: 1 },
+  0x20: { rate: 16000, channels: 2 },
+  0x40: { rate: 24000, channels: 1 },
+  0x80: { rate: 24000, channels: 2 },
+  0x100: { rate: 32000, channels: 1 },
+  0x200: { rate: 32000, channels: 2 },
+  0x400: { rate: 44100, channels: 1 },
+  0x800: { rate: 44100, channels: 2 },
+  0x4000: { rate: 48000, channels: 1 },
+  0x8000: { rate: 48000, channels: 2 }
+}
+
+// Generic DataStream (used for the iAP2-over-CarPlay tunnel) and the iAP channel UUID.
+const STREAM_TYPE_DATA = 130
+const IAP_DATASTREAM_UUID = 'E9459FD0-BCAD-4C45-820F-1E72447EF2F2'
+
+/** Map a CarPlay audioType category onto the Windows playback volume category. */
+function audioProfile(audioType: string): CpAudioProfile {
+  switch (audioType) {
+    case 'telephony':
+      return {
+        audioType: 2,
+        label: 'telephony'
+      }
+    case 'speechRecognition':
+      return {
+        audioType: 1,
+        label: 'speech'
+      }
+    case 'media': // entertainment stream (the music/media type)
+      return {
+        audioType: 3,
+        label: 'media'
+      }
+    default: // default / alert / compatibility: low-latency nav + alert prompts (Opus)
+      return {
+        audioType: 4,
+        label: audioType || 'nav'
+      }
+  }
+}
+
+const PLIST_CONTENT_TYPE = 'application/x-apple-binary-plist'
+const PAIRING_CONTENT_TYPE = 'application/pairing+tlv8'
+const OCTET_CONTENT_TYPE = 'application/octet-stream'
+
+/** Per-connection handshake + session state. */
+interface CpSession {
+  pairSetup: PairSetup
+  pairVerify: PairVerify
+  /** Set once pair-verify succeeds; from then on the connection is framed + encrypted. */
+  cipher: ControlCipher | null
+  /** Buffer for reassembling encrypted frames before decryption. */
+  encBuf: Buffer
+  /** The phone's address, used to drive the timing sync and reach its ports. */
+  peerHost: string
+  /** BT MAC from the session SETUP, sent in the tunnel header for the network-session guard. */
+  deviceBtMac: string
+  /** Media session servers, created during SETUP, torn down with the connection. */
+  timing: TimingSync | null
+  keepAlive: KeepAliveServer | null
+  screen: ScreenStream | null
+  clusterScreen: ScreenStream | null
+  clusterCodecEmitted: boolean
+  /** One record per audio stream (media/alt/high), created during SETUP: its media
+   *  clock (for /feedback), the UDP stream, and its Windows decoder (AAC-LC/OPUS, or null
+   *  for raw PCM). Keyed by CarPlay stream type so TEARDOWN can drop just one stream. */
+  audioMeta: {
+    type: number
+    sampleRate: number
+    connectionID: PlistValue
+    /** The Windows audio receiver that owns the UDP ports. */
+    receiverId: number
+    /** The Windows microphone stream for a bidirectional MainAudio, else null. */
+    micStreamId: number | null
+    /** Media clock anchor: the first sample the receiver received, and when. */
+    origin: { firstSample: number; originNs: bigint } | null
+    /** The phone's negotiated audioLatencyMs for this stream: the decoder jitter buffer and
+     *  the /feedback playback-position lag. */
+    playoutLatencyMs: number
+  }[]
+  /** iAP2-over-CarPlay tunnel + its relay connection to the helper's iAP2 stack. */
+  iapTunnel: IapTunnel | null
+  iapRelay: any
+  /** TCP event channel the phone connects to after session SETUP. */
+  event: net.Server | null
+  /** The live event connection + its cipher, used to send HID (touch) reports. */
+  eventSock: net.Socket | null
+  eventCipher: ControlCipher | null
+  pendingEvents: Buffer[]
+  recordResponseSent: boolean
+  eventCseq: number
+  codecEmitted: boolean
+  mainStreamReady: boolean
+  lastCtrlReadNs: bigint
+  heartbeat: ReturnType<typeof setInterval> | null
+}
+
+export class CpStack extends EventEmitter {
+  deviceFilter: ((id: string) => boolean) | null = null
+  private deviceAccepted = false
+  private readonly _conns = new Set<net.Socket>()
+  private _configRefresh: (() => void) | null = null
+  /** The session whose event connection is live, used to route outgoing touch. */
+  private _active: CpSession | null = null
+  /** The session that reached RECORD, so its control-connection close ends the session. */
+  private _liveSession: CpSession | null = null
+  /** Control socket per session, so a WiFi-drop can destroy the hung one. */
+  private readonly _sessionSock = new Map<CpSession, net.Socket>()
+  /** Set while stop() tears the connection down, so our own socket destroys don't self-signal. */
+  private _closing = false
+  private readonly _mfi: MfiSigner
+  /** Throttle counter for the /feedback diagnostics log. */
+  private _fbN = 0
+  private _clusterWantActive = false
+  /** Whether the phone reports a call, which it flags as a speech session too. */
+  private _callActive = false
+  /** Last Siri speech-mode state, so we emit 'speech-active' only on transitions. */
+  private _speechActive = false
+  /** True while this phone is the one whose audio reaches the sink. */
+  private _audioActive = false
+  /** The Windows audio receivers, so its start report finds the right stream. */
+  private readonly _audioById = new Map<
+    number,
+    { prof: CpAudioProfile; started: (firstSample: number) => void }
+  >()
+
+  constructor(private readonly cfg: CpStackConfig) {
+    super()
+    this._mfi = cfg.mfi
+    // The first received audio sample anchors the negotiated media clock.
+    onAudioReceiverStarted((id, firstSample) => this._audioStarted(id, firstSample))
+  }
+
+  private _audioStarted(id: number, firstSample: number): void {
+    const entry = this._audioById.get(id)
+    if (!entry) return
+    entry.started(firstSample)
+    this.emit('audio-active', entry.prof, true)
+  }
+
+  stop(): void {
+    this._closing = true
+    // Tear down live sessions (closes the iAP2-over-CarPlay tunnel to the Windows iAP2 link,
+    // so its session count drops and the network-session watcher can reconnect).
+    for (const sock of [...this._conns]) sock.destroy()
+    this._conns.clear()
+  }
+
+  /** Adopt an already-accepted control connection (WinPlay owns the TCP17000 listener). */
+  attachSocket(sock: net.Socket): void {
+    const peer = `${sock.remoteAddress}:${sock.remotePort}`
+    console.log(`[cpStack] control connection from ${peer}`)
+    this._conns.add(sock)
+    const session: CpSession = {
+      pairSetup: new PairSetup(),
+      pairVerify: new PairVerify(),
+      cipher: null,
+      encBuf: Buffer.alloc(0),
+      peerHost: scopePeerAddress(sock.remoteAddress ?? '',this.cfg.networkScope),
+      deviceBtMac: '',
+      timing: null,
+      keepAlive: null,
+      screen: null,
+      clusterScreen: null,
+      clusterCodecEmitted: false,
+      audioMeta: [],
+      iapTunnel: null,
+      iapRelay: null,
+      event: null,
+      eventSock: null,
+      eventCipher: null,
+      eventCseq: 0,
+      pendingEvents: [],
+      recordResponseSent: false,
+      codecEmitted: false,
+      mainStreamReady: false,
+      lastCtrlReadNs: process.hrtime.bigint(),
+      heartbeat: null
+    }
+    this._sessionSock.set(session, sock)
+    // Requests of one connection are processed one after another.
+    let acc = Buffer.alloc(0)
+    let chain: Promise<void> = Promise.resolve()
+    let queuedBytes=0
+
+    sock.on('data', (chunk: Buffer) => {
+      queuedBytes+=chunk.length
+      if(queuedBytes>8*1024*1024){sock.destroy();return}
+      session.lastCtrlReadNs = process.hrtime.bigint()
+      chain = chain.then(async () => {
+        // Once verified, incoming bytes are encrypted frames; decrypt to plaintext RTSP.
+        if (session.cipher) {
+          session.encBuf = Buffer.concat([session.encBuf, chunk])
+          const { data, rest } = session.cipher.decrypt(session.encBuf)
+          session.encBuf = rest
+          acc = Buffer.concat([acc, data])
+        } else {
+          acc = Buffer.concat([acc, chunk])
+        }
+
+        const { messages, rest } = parseMessages(acc)
+        acc = Buffer.concat([rest])
+        for (const req of messages) {
+          let out: Buffer
+          try {
+            const response=await this._handle(req, session);
+            if(req.method!=='OPTIONS'&&!req.path.endsWith('/feedback'))this.emit('protocol-state','控制请求',req.method+' '+(['auth-setup','pair-setup','pair-verify','info','command'].find(p=>req.path.endsWith('/'+p))||'session')+' HTTP/RTSP '+(response.status||200));
+            out = buildResponse(req, response)
+          } catch (e) {
+            console.warn(`[cpStack] handler error for ${req.method} ${req.path}:`, e)
+            this.emit('protocol-state','控制请求失败',req.method+' '+((e as any).code||'handler-error'));
+            out = buildResponse(req, { status: 500 })
+          }
+          const wire=session.cipher ? session.cipher.encrypt(out) : out
+          if(req.method==='RECORD')sock.write(wire,()=>{if(!sock.destroyed)this._recordResponseWritten(session)})
+          else sock.write(wire)
+          // pair-verify M4 is answered in plaintext; encryption starts on the next message.
+          if (!session.cipher && session.pairVerify.controlKeys) {
+            const k = session.pairVerify.controlKeys
+            session.cipher = new ControlCipher(k.readKey, k.writeKey)
+            console.log('[cpStack] control channel encrypted')
+          }
+        }
+      }).catch(()=>{this.emit('error',new Error('Invalid encrypted CarPlay control message'));sock.destroy()}).finally(()=>{queuedBytes-=chunk.length})
+    })
+    sock.on('error', (err) => console.warn(`[cpStack] socket error ${peer}: ${err.message}`))
+    sock.on('close', () => {
+      console.log(`[cpStack] control connection closed ${peer}`)
+      this._conns.delete(sock)
+      this._sessionSock.delete(session)
+      this._teardown(session)
+      if (!this._closing) {
+        if(session===this._liveSession)this._liveSession = null
+        this.emit('session-ended')
+      }
+    })
+  }
+
+  private _teardown(session: CpSession): void {
+    if (session.heartbeat) {
+      clearInterval(session.heartbeat)
+      session.heartbeat = null
+    }
+    session.timing?.stop()
+    session.keepAlive?.stop()
+    session.screen?.stop()
+    session.clusterScreen?.stop()
+    for (const m of session.audioMeta) {
+      this._closeAudio(m)
+    }
+    session.recordResponseSent=false
+    session.pendingEvents=[]
+    session.iapTunnel?.stop()
+    session.iapRelay?.destroy()
+    session.audioMeta = []
+    session.iapTunnel = null
+    session.iapRelay = null
+    session.event?.close()
+    session.timing = null
+    session.keepAlive = null
+    session.screen = null
+    session.clusterScreen = null
+    session.event = null
+  }
+
+  /** The connection's stable pair-verify controller id (the CP device identity). */
+  get activeControllerId(): string | null {
+    return this._liveSession?.pairVerify.controllerId ?? null
+  }
+
+  /** Sets the level of every stream of this audioType in Windows. */
+  setStreamVolume(audioType: number, level: number, rampMs: number): void {
+    for (const [id, entry] of this._audioById) {
+      if (entry.prof.audioType === audioType) {
+        setAudioReceiverVolume(id, level, rampMs)
+      }
+    }
+  }
+
+  /** Closes one stream's ports, pipeline and microphone in Windows. */
+  private _closeAudio(m: {
+    receiverId: number
+    micStreamId: number | null
+  }): void {
+    const entry = this._audioById.get(m.receiverId)
+    this._audioById.delete(m.receiverId)
+    closeAudioReceiver(m.receiverId)
+    if (entry) this.emit('audio-active', entry.prof, false)
+    if (entry?.prof.label === 'telephony') this._callActive = false
+    if (m.micStreamId != null) {
+      closeMicUplink(m.micStreamId)
+      this.emit('mic-active', false, 0, 0)
+    }
+  }
+
+  private _normHost(h: string): string {
+    return h ? h.replace(/%.*$/, '').replace(/^::ffff:/i, '') : ''
+  }
+
+  /** TEARDOWN names the streams to drop (e.g. only music when a track ends); tear down
+   *  just those and leave the rest (nav, screen, timing) running. A TEARDOWN with no
+   *  stream list is a session-level teardown and takes the whole session down. */
+  private _handleTeardown(req: RtspRequest, session: CpSession): RtspResponse {
+    let types: number[] = []
+    try {
+      const body = decodeBplist(req.body) as Record<string, PlistValue>
+      for(const key of ['reason','reasonCode','errorCode','status'])if(typeof body?.[key]==='number'||typeof body?.[key]==='bigint')this.emit('protocol-state','iPhone结束会话',key+'='+String(body[key]));
+      const streams = body?.streams
+      if (Array.isArray(streams)) {
+        types = streams.map((s) => Number((s as Record<string, PlistValue>).type))
+      }
+    } catch {
+      /* no/invalid body -> fall through to a full session teardown */
+    }
+    if (types.length === 0) {
+      console.log('[cpStack] TEARDOWN (session)')
+      this._teardown(session)
+      return { status: 200 }
+    }
+    console.log(`[cpStack] TEARDOWN streams ${types.join(',')}`)
+    for (const type of types) {
+      if (type === STREAM_TYPE_MAIN_SCREEN) {
+        session.screen?.stop()
+        session.screen = null
+        continue
+      }
+      const idx = session.audioMeta.findIndex((m) => m.type === type)
+      if (idx < 0) continue
+      const [m] = session.audioMeta.splice(idx, 1)
+      this._closeAudio(m)
+    }
+    return { status: 200 }
+  }
+
+  private async _handle(req: RtspRequest, session: CpSession): Promise<RtspResponse> {
+    // /feedback and OPTIONS are keepalive chatter (once a second); suppressed
+    // from the log too. Everything else is worth a line.
+    const chatty = req.method === 'OPTIONS' || req.path.toLowerCase().endsWith('/feedback')
+    if (!chatty) {
+      console.log(`[cpStack] < ${req.method} ${req.path} (body ${req.body.length}B)`)
+      if (DEBUG && req.body.length > 0) {
+        try {
+          const decoded = decodeBplist(req.body)
+          console.log(
+            '[cpStack]   body:',
+            JSON.stringify(decoded, (_k, v) => (typeof v === 'bigint' ? Number(v) : v))
+          )
+        } catch {
+          console.log(`[cpStack]   body: not a plist (${req.body.length}B)`)
+        }
+      }
+    }
+
+    if (req.method === 'SETUP') {
+      return await this._handleSetup(req, session)
+    }
+    if (req.method === 'RECORD') {
+      console.log('[cpStack] RECORD (session started)')
+      this._liveSession = session
+      // Event commands are only valid once the session has started (older iOS stalls
+      // the bring-up ~5s on a POST /command sent before RECORD). Push the initial
+      // night mode now, not on event-channel connect.
+      this.emit('session-active', this._normHost(session.peerHost));
+      
+      return { status: 200 }
+    }
+    if (req.method === 'TEARDOWN') {
+      try { console.log('[cpStack] TEARDOWN reason:', JSON.stringify(decodeBplist(req.body))) } catch {}
+      return this._handleTeardown(req, session)
+    }
+
+    const path = req.path.toLowerCase()
+
+    if (path.endsWith('/pair-setup')) {
+      const body = session.pairSetup.handle(req.body)
+      return { headers: { 'Content-Type': PAIRING_CONTENT_TYPE }, body }
+    }
+
+    if (path.endsWith('/pair-verify')) {
+      const body = session.pairVerify.handle(req.body)
+      return { headers: { 'Content-Type': PAIRING_CONTENT_TYPE }, body }
+    }
+
+    if (path.endsWith('/auth-setup')) {
+      const body = await handleAuthSetup(req.body, this._mfi)
+      if (!body) return { status: 400 }
+      return { headers: { 'Content-Type': OCTET_CONTENT_TYPE }, body }
+    }
+
+    if (path.endsWith('/info')) {
+      this._configRefresh?.()
+      // The phone sends its own dictionary with the request; log what it tells us about itself.
+      if (req.body.length > 0) {
+        try {
+          const ask = decodeBplist(req.body)
+          console.log(
+            `[cpStack] /info request from phone: ${JSON.stringify(ask, (_k, v) =>
+              typeof v === 'bigint' ? Number(v) : v
+            )}`
+          )
+        } catch {
+          console.log(`[cpStack] /info request body not a plist (${req.body.length}B)`)
+        }
+      }
+      const info = buildInfoPlist(this.cfg)
+      const i = info as Record<string, unknown>
+      console.log(
+        `[cpStack] /info audio: disableAudioOutput=${this.cfg.disableAudioOutput} audioFormats=${Array.isArray(i.audioFormats) ? i.audioFormats.length : 'MISSING'} audioLatencies=${Array.isArray(i.audioLatencies) ? i.audioLatencies.length : 'MISSING'}`
+      )
+      const body = encodeBplist(info)
+      return { headers: { 'Content-Type': PLIST_CONTENT_TYPE }, body }
+    }
+
+    if (req.method === 'POST' && path.endsWith('/command')) {
+      return this._handleCommand(req, session)
+    }
+
+    if (req.method === 'POST' && path.endsWith('/feedback')) {
+      return this._buildFeedback(session)
+    }
+
+    // Unrouted request: acknowledged with a bare 200, and always logged so nothing
+    // the phone sends stays invisible.
+    console.log(`[cpStack] unhandled request ${req.method} ${req.path} (ack 200)`)
+    return { status: 200 }
+  }
+
+  /** Control-channel commands from the phone (POST /command). */
+  /** Track the Siri speech mode from modesChanged appStates (appStateID 1). speechMode
+   *  is Recognizing(2)/Speaking(1) while Siri is active and None(-1) once it is done  */
+  private _handleModesChanged(body: Record<string, PlistValue>): void {
+    const params = (body.params ?? {}) as Record<string, PlistValue>
+    const appStates = params.appStates
+    if (!Array.isArray(appStates)) return
+    let inCall = this._callActive
+    for (const s of appStates) {
+      const st = s as Record<string, PlistValue>
+      if (Number(st.appStateID) === 2 && st.entity !== undefined) inCall = Number(st.entity) === 1
+    }
+    this._callActive = inCall
+
+    let active = this._speechActive
+    for (const s of appStates) {
+      const st = s as Record<string, PlistValue>
+      if (Number(st.appStateID) !== 1 || st.speechMode === undefined) continue
+      const mode = Number(st.speechMode)
+      active = !inCall && (mode === 1 || mode === 2)
+    }
+    if (inCall) active = false
+    if (active !== this._speechActive) {
+      this._speechActive = active
+      console.log(`[cpStack] Siri speech ${active ? 'active' : 'done'}`)
+      this.emit('speech-active', active)
+    }
+  }
+
+  private _handleCommand(req: RtspRequest, session: CpSession): RtspResponse {
+    let body: Record<string, PlistValue> = {}
+    try {
+      body = decodeBplist(req.body) as Record<string, PlistValue>
+    } catch {
+      /* empty or non-plist body: nothing to route */
+    }
+    const type = String(body.type ?? '')
+    if(['disableBluetooth','iAPSendMessage','modesChanged'].includes(type))this.emit('protocol-state','控制命令',type)
+    // The car/home button in the CarPlay dock sends requestUI (no url), asking us
+    // to bring up WinPlay's settings window.
+    if (type === 'requestUI') {
+      console.log('[cpStack] requestUI → host UI requested')
+      this.emit('host-ui-requested')
+    } else if (type === 'disableBluetooth') {
+      const params = (body.params ?? {}) as Record<string, PlistValue>
+      const deviceID = String(params.deviceID ?? '')
+      console.log(`[cpStack] disableBluetooth (deviceID=${deviceID}) — disconnecting BT`)
+      this.emit('disable-bluetooth', deviceID)
+    } else if (type === 'modesChanged') {
+      this._handleModesChanged(body)
+      if (DEBUG) {
+        // Logs who owns each resource (resourceID 2 = main audio; entity 1 = phone, 2 = accessory).
+        const j = JSON.stringify(body.params ?? body, (_k, v) =>
+          typeof v === 'bigint' ? Number(v) : v
+        )
+        console.log(`[cpStack] modesChanged ${j}`)
+      }
+    } else if (type === 'suggestUI') {
+      // The phone offers URLs the head unit may show; WinPlay shows its own UI instead.
+      const params = (body.params ?? {}) as Record<string, PlistValue>
+      const urls = Array.isArray(params.urls) ? params.urls : []
+      console.log(`[cpStack] suggestUI (${urls.length} urls, not shown)`)
+    } else if (type === 'iAPSendMessage') {
+      const p = (body.params ?? {}) as Record<string, PlistValue>
+      const d = p.data
+      if (Buffer.isBuffer(d)) {
+        session.iapRelay?.write(d)
+      }
+    } else if (type === 'duckAudio') {
+      const params = (body.params ?? {}) as Record<string, PlistValue>
+      const durationMs = Number(params.durationMs ?? 0)
+      const volumeDb = Number(params.volume ?? 0)
+      const level = Math.max(0, Math.min(1, 10 ** (volumeDb / 20)))
+      console.log(
+        `[cpStack] duckAudio volume=${volumeDb}dB (level=${level.toFixed(3)}) durationMs=${durationMs}`
+      )
+      this.emit('duck', level, durationMs)
+    } else if (type === 'unduckAudio') {
+      const params = (body.params ?? {}) as Record<string, PlistValue>
+      const durationMs = Number(params.durationMs ?? 0)
+      console.log(`[cpStack] unduckAudio durationMs=${durationMs}`)
+      this.emit('duck', 1, durationMs)
+    } else if (type) {
+      // Unrouted command: log the whole body so a new message type can be identified.
+      const j = JSON.stringify(body, (_k, v) => (typeof v === 'bigint' ? Number(v) : v))
+      console.log(`[cpStack] unhandled command '${type}' (ack 200) ${j}`)
+    }
+    return { status: 200 }
+  }
+
+  /**
+   * Answer POST /feedback with the media-clock stream list. The buffered media
+   * stream (type 102) is clock-driven: an empty response makes the phone
+   * treat the stream as dead and tear it down every few seconds. We report
+   * {type, sampleRate} per active audio stream here (the full timestamp anchor is
+   * only added once a playback-rate estimate exists, which we do not track yet).
+   */
+  private _buildFeedback(session: CpSession): RtspResponse {
+    if (session.audioMeta.length === 0) return { status: 200 }
+    const streams = session.audioMeta.map((m) => {
+      const s: Record<string, PlistValue> = { type: m.type, sampleRate: m.sampleRate }
+      // Reports the playback position extrapolated at real time: origin sample + elapsed × rate.
+      const o = m.origin
+      if (o) {
+        const nowNs = process.hrtime.bigint()
+        // The reported lag is this stream's negotiated audioLatencyMs (buffered stream: 1000 ms).
+        const PLAYOUT_LATENCY_SEC = m.playoutLatencyMs / 1000
+        const elapsedSec = Math.max(0, Number(nowNs - o.originNs) / 1e9 - PLAYOUT_LATENCY_SEC)
+        const play = (o.firstSample + Math.round(elapsedSec * m.sampleRate)) >>> 0
+        s.streamConnectionID = m.connectionID
+        // hostTime is in the phone's synchronized clock domain (TimingSync); hostTimeRaw stays raw.
+        s.timestamp = session.timing ? session.timing.syncedNtp() : ntp64Now()
+        s.timestampRawNs = nowNs
+        s.sampleTime = play
+        if (DEBUG) {
+          this._fbN++
+          if (this._fbN % 3 === 0) {
+            console.log(`[cpStack fb] type=${m.type} play=${play}`)
+          }
+        }
+      }
+      return s
+    })
+    return { headers: { 'Content-Type': PLIST_CONTENT_TYPE }, body: encodeBplist({ streams }) }
+  }
+
+  private async _handleSetup(req: RtspRequest, session: CpSession): Promise<RtspResponse> {
+    let body: PlistValue
+    try {
+      body = decodeBplist(req.body)
+    } catch (e) {
+      console.warn('[cpStack] SETUP body is not a plist:', (e as Error).message)
+      return { status: 400 }
+    }
+    const dict = body as Record<string, PlistValue>
+    if (this.deviceFilter && !this.deviceAccepted) {
+      const id = typeof dict.deviceID === 'string' ? dict.deviceID : ''
+      if (!id || !this.deviceFilter(id)) return { status: 403 }
+      this.deviceAccepted = true
+    }
+    const streams = dict.streams
+
+    if (Array.isArray(streams)) {
+      const respStreams: PlistValue[] = []
+      for (const s of streams) {
+        const sd = s as Record<string, PlistValue>
+        const type = Number(sd.type)
+        this.emit('protocol-state','流协商','type='+type)
+        if (type === STREAM_TYPE_MAIN_SCREEN) {
+          respStreams.push({ type, dataPort: await this._setupScreen(sd, session) })
+        } else if (type === STREAM_TYPE_ALT_SCREEN) {
+          respStreams.push({ type, dataPort: await this._setupScreen(sd, session, true) })
+        } else if (
+          type === STREAM_TYPE_MAIN_AUDIO ||
+          type === STREAM_TYPE_ALT_AUDIO ||
+          type === STREAM_TYPE_MAIN_HIGH_AUDIO
+        ) {
+          console.log(`[cpStack] SETUP audio stream type ${type}`)
+          respStreams.push(await this._setupAudio(sd, session, type))
+        } else if (type === STREAM_TYPE_DATA) {
+          const resp = await this._setupDataStream(sd, session)
+          if (resp) respStreams.push(resp)
+        } else {
+          console.log(`[cpStack]   SETUP stream type ${type} not handled yet`)
+        }
+      }
+      return {
+        headers: { 'Content-Type': PLIST_CONTENT_TYPE },
+        body: encodeBplist({ streams: respStreams })
+      }
+    }
+
+    // Session-level SETUP carries the phone's identity, authoritative over any
+    // transport: deviceID = its BT MAC, macAddress = its WiFi MAC on our AP, plus
+    // the friendly name and model.
+    const idName = typeof dict.name === 'string' ? dict.name : ''
+    const idDevice = typeof dict.deviceID === 'string' ? dict.deviceID : ''
+    const idWifi = typeof dict.macAddress === 'string' ? dict.macAddress.toLowerCase() : ''
+    const idModel = typeof dict.model === 'string' ? dict.model : ''
+    if (idDevice) session.deviceBtMac = idDevice
+    if (idName || idDevice || idWifi) {
+      this.emit('device-info', {
+        name: idName,
+        deviceId: idDevice,
+        wifiMac: idWifi,
+        model: idModel
+      })
+    }
+
+    // Session-level SETUP: advertise our timing and event ports. The phone opens
+    // a TCP connection to the event port before it sends the stream-level SETUP.
+    const timing = new TimingSync()
+    const timingPort = await timing.listen()
+    session.timing = timing
+    // Drive the NTP clock sync against the phone's timing port, or the phone
+    // tears the session down after a few seconds.
+    const peerTimingPort = Number(dict.timingPort) || 0
+    if (peerTimingPort > 0) timing.start(session.peerHost, peerTimingPort)
+    const eventPort = await this._openEventChannel(session)
+    let keepAlivePort = 0
+    if (dict.keepAliveLowPower) {
+      const keepAlive = new KeepAliveServer()
+      session.keepAlive = keepAlive
+      keepAlivePort = await keepAlive.listen()
+    }
+    console.log(
+      `[cpStack] SETUP session (timingPort=${timingPort}, eventPort=${eventPort}, keepAlivePort=${keepAlivePort})`
+    )
+    const resp: { [k: string]: PlistValue } = { timingPort, eventPort }
+    if (keepAlivePort) resp.keepAlivePort = keepAlivePort
+    const feats: PlistValue[] = this.cfg.hevc ? ['hevc', 'iAPChannel'] : ['iAPChannel']
+    feats.push('viewAreas')
+    if (this.cfg.cluster) feats.push('altScreen')
+    resp.enabledFeatures = feats
+    return { headers: { 'Content-Type': PLIST_CONTENT_TYPE }, body: encodeBplist(resp) }
+  }
+
+  private _openEventChannel(session: CpSession): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const server = net.createServer((s) => {
+        console.log('[cpStack] event channel connected')
+        // The event connection is encrypted from the first byte with Events keys
+        // derived from the pair-verify secret. We use it to push HID (touch) reports.
+        const shared = session.pairVerify.sharedSecret
+        if (shared) {
+          // Unlike the control channel, the event transport is NOT key-swapped:
+          // the accessory writes with Events-Write and reads with Events-Read.
+          const writeKey = hkdfSha512(shared, 'Events-Salt', 'Events-Write-Encryption-Key', 32)
+          const readKey = hkdfSha512(shared, 'Events-Salt', 'Events-Read-Encryption-Key', 32)
+          session.eventCipher = new ControlCipher(readKey, writeKey)
+        }
+        session.eventSock = s
+        this.emit('protocol-state','事件通道已连接','')
+        if(session.recordResponseSent)for(const body of session.pendingEvents.splice(0))this._sendEventCommand(session,body)
+        this._active = session
+        let enc: Buffer = Buffer.alloc(0)
+        let plain: Buffer = Buffer.alloc(0)
+        s.on('data', (chunk: Buffer) => {
+          const cipher = session.eventCipher
+          if (!cipher) return
+          enc = Buffer.concat([enc, chunk])
+          try {
+            const { data, rest } = cipher.decrypt(enc)
+            enc = rest
+            if (data.length) plain = Buffer.concat([plain, data])
+          } catch (err) {
+            console.warn(`[cpStack] event channel decrypt failed: ${(err as Error).message}`)
+            return
+          }
+          const { messages, rest } = parseMessages(plain)
+          plain = rest
+          for (const m of messages) this._onEventMessage(session, m)
+        })
+        s.on('error', () => {})
+        s.on('close', () => {
+          console.log('[cpStack] event channel closed')
+          session.eventSock = null
+          if (this._active === session) this._active = null
+        })
+      })
+      server.on('error', reject)
+      server.listen({ port: 0, host: '::', ipv6Only: false }, () => {
+        session.event = server
+        const addr = server.address()
+        resolve(typeof addr === 'object' && addr ? addr.port : 0)
+      })
+    })
+  }
+
+  /** Send touch contacts (normalised 0..1) to the phone as a multitouch HID report. */
+  sendTouches(contacts: { x: number; y: number; down: boolean; id: number }[]): void {
+    const s = this._active
+    if (!s) return
+    const report = touchReport(
+      contacts.map((c) => ({
+        id: c.id,
+        x: c.x * this.cfg.main.widthPixels,
+        y: c.y * this.cfg.main.heightPixels,
+        down: c.down
+      }))
+    )
+    this._sendEventCommand(
+      s,
+      encodeBplist({ type: 'hidSendReport', uuid: TOUCH_HID_UID.toString(16), hidReport: report })
+    )
+  }
+
+  private _sendHidReport(uid: number, report: Buffer): void {
+    const s = this._active
+    if (!s) return
+    this._sendEventCommand(
+      s,
+      encodeBplist({ type: 'hidSendReport', uuid: uid.toString(16), hidReport: report })
+    )
+  }
+
+  /** Momentary knob event: send the pressed state, then a released (all-zero) report. */
+  sendKnob(state: KnobState, momentary = true): void {
+    this._sendHidReport(KNOB_HID_UID, knobReport(state))
+    if (momentary) this._sendHidReport(KNOB_HID_UID, knobReport({}))
+  }
+
+  /** Hold or release the knob select button (no auto-release). */
+  sendKnobSelect(down: boolean): void {
+    this._sendHidReport(KNOB_HID_UID, knobReport({ select: down }))
+  }
+
+  /** Momentary media key: send the index, then release (0). */
+  sendMedia(index: number): void {
+    this._sendHidReport(MEDIA_HID_UID, mediaReport(index))
+    this._sendHidReport(MEDIA_HID_UID, mediaReport(0))
+  }
+
+  /** Momentary telephony key: send the index, then release (0). */
+  sendTelephony(index: number): void {
+    this._sendHidReport(TELEPHONY_HID_UID, telephonyReport(index))
+    this._sendHidReport(TELEPHONY_HID_UID, telephonyReport(0))
+  }
+
+  /** Invokes Siri as a dedicated Siri button (R6 3.3.7.1.2): buttonDown(2) then buttonUp(3),
+   *  sent as one momentary click. */
+  invokeSiri(): void {
+    const s = this._active
+    if (!s) {
+      console.log('[cpStack] invokeSiri: no active event connection, ignoring')
+      return
+    }
+    console.log('[cpStack] invokeSiri: requestSiri buttonDown+buttonUp (click)')
+    this._sendEventCommand(s, encodeBplist({ type: 'requestSiri', params: { siriAction: 2 } }))
+    this._sendEventCommand(s, encodeBplist({ type: 'requestSiri', params: { siriAction: 3 } }))
+  }
+
+  /** Send a bplist command to the phone over the encrypted event channel. */
+  /** The event channel is bidirectional reverse-HTTP: the phone answers our commands and
+   *  sends its own requests, each of which gets a response. */
+  private _onEventMessage(session: CpSession, msg: RtspRequest): void {
+    if (msg.method.startsWith('RTSP/') || msg.method.startsWith('HTTP/')) {
+      if (msg.path !== '200')
+        console.warn(`[cpStack] event response ${msg.path} ${msg.protocol ?? ''}`)
+      return
+    }
+    let decoded = ''
+    if (msg.body.length) {
+      try {
+        decoded = ` ${JSON.stringify(decodeBplist(msg.body))}`
+      } catch {
+        decoded = ` (${msg.body.length}B non-plist body)`
+      }
+    }
+    console.log(`[cpStack] event < ${msg.method} ${msg.path}${decoded}`)
+    if (!session.eventSock || !session.eventCipher) return
+    session.eventSock.write(session.eventCipher.encrypt(buildResponse(msg, { status: 200 })))
+  }
+
+  private _recordResponseWritten(session:CpSession):void {
+    if(this._liveSession!==session)return
+    session.recordResponseSent=true
+    for(const body of session.pendingEvents.splice(0))this._sendEventCommand(session,body)
+    this._openIapMessageRelay(session)
+  }
+
+  private _sendEventCommand(s: CpSession, body: Buffer): void {
+    if(!s.recordResponseSent||!s.eventSock||!s.eventCipher){if(s.pendingEvents.length>=64)throw new Error('事件通道发送队列超限');s.pendingEvents.push(body);return}
+    s.eventCseq++
+    const head =
+      `POST /command RTSP/1.0\r\n` +
+      `Content-Type: ${PLIST_CONTENT_TYPE}\r\n` +
+      `Content-Length: ${body.length}\r\n` +
+      `CSeq: ${s.eventCseq}\r\n\r\n`
+    const msg = Buffer.concat([Buffer.from(head, 'utf8'), body])
+    s.eventSock.write(s.eventCipher.encrypt(msg))
+  }
+
+  private async _setupAudio(
+    sd: Record<string, PlistValue>,
+    session: CpSession,
+    type: number
+  ): Promise<PlistValue> {
+    const shared = session.pairVerify.sharedSecret
+    if (!shared) throw new Error('audio SETUP arrived before pair-verify')
+    const streamId = sd.streamConnectionID
+    // The jitter buffer is sized to the phone's audioLatencyMs and /feedback reports the same
+    // lag; absent, 1000 for a buffered and 0 for a low-latency stream.
+    const audioLatencyMs = Number(sd.audioLatencyMs) || 0
+    // Same DataStream key derivation as the screen: HKDF-SHA512(pair-verify shared,
+    // "DataStream-Salt"<id>, "DataStream-Output-Encryption-Key"). Audio output streams
+    // (phone -> us) are sealed with the output key.
+    const key = hkdfSha512(
+      shared,
+      `DataStream-Salt${streamId}`,
+      'DataStream-Output-Encryption-Key',
+      32
+    )
+    const prof = audioProfile(String(sd.audioType ?? 'media'))
+    // The phone echoes the single chosen format. AAC-LC (0x400000 44.1k / 0x800000
+    // 48k stereo) is decoded to PCM by Chromium WebCodecs; PCM formats pass straight through.
+    const fmt = Number(sd.audioFormat) || 0
+    const isAacLc = (fmt & (AAC_LC_44K_STEREO | AAC_LC_48K_STEREO)) !== 0
+    const isOpus = (fmt & OPUS_MONO) !== 0
+    const aacIs48k = (fmt & AAC_LC_48K_STEREO) !== 0
+    // OPUS decodes to 48k mono, AAC-LC to 44.1k/48k stereo, PCM passes through at
+    // whatever rate/channels the phone chose. The audio output resamples any of
+    // these to our configured output rate (44.1k or 48k).
+    const pcm = PCM_FORMAT[fmt]
+    let sampleRate: number
+    let channels: number
+    if (isOpus) {
+      sampleRate = 48000
+      channels = 1
+    } else if (isAacLc) {
+      sampleRate = aacIs48k ? 48000 : 44100
+      channels = 2
+    } else if (pcm) {
+      sampleRate = pcm.rate
+      channels = pcm.channels
+    } else {
+      sampleRate = 44100
+      channels = 2
+    }
+    const codec: CpAudioCodec = isAacLc ? 'aac-lc' : isOpus ? 'opus' : 'pcm'
+    const meta = {
+      type,
+      sampleRate,
+      connectionID: streamId as PlistValue,
+      playoutLatencyMs: audioLatencyMs,
+      receiverId: 0,
+      micStreamId: null as number | null,
+      origin: null as { firstSample: number; originNs: bigint } | null
+    }
+
+    const audioOpts = {
+      media: sd.audioType === 'media' || type === 102,
+      codec,
+      payloadType: type,
+      // OPUS always clocks at 48k, AAC at its negotiated rate
+      clockRate: isOpus ? 48000 : sampleRate,
+      channels,
+      latencyMs: audioLatencyMs > 0 ? audioLatencyMs : 1000,
+      // audioType 3 is the buffered media stream, the others take the short path
+      realtime: prof.audioType !== 3,
+      device: this.cfg.audioDevice?.() || undefined
+    }
+    const receiver = await openAudioReceiver(key, audioOpts)
+    const {
+      streamId: receiverId,
+      dataPort,
+      controlPort
+    } = receiver
+    meta.receiverId = receiverId
+    setAudioReceiverVolume(receiverId,this.cfg.audioVolume?.(prof.audioType) ?? 1,0)
+    if (this._audioActive) {
+      setAudioReceiverActive(receiverId, true)
+    }
+
+    // MainAudio is bidirectional: a send port in the phone's request means it wants
+    // mic. The input key is the mirror of the output key. Over wireless the phone
+    // picks OPUS for the mic (compressed audio is preferred over Wi-Fi); the encode rate is the negotiated
+    // OPUS rate (16k/24k/48k), independent of the downlink 48k.
+    const phoneMicPort = type === STREAM_TYPE_MAIN_AUDIO ? Number(sd.dataPort) || 0 : 0
+    const opusRate =
+      fmt & 0x40000000 ? 48000 : fmt & 0x20000000 ? 24000 : fmt & 0x10000000 ? 16000 : 24000
+    const micRate = isOpus ? opusRate : sampleRate
+    const micChannels = isOpus ? 1 : channels
+    const framesPerPacket = Number(sd.framesPerPacket) || 0
+    const frameMs = framesPerPacket > 0 ? Math.round((framesPerPacket / micRate) * 1000) : 20
+    // OPUS low-latency bitrate tiers (R6): 48k ≤24kHz, 64k ≤32kHz, 96k at 48kHz.
+    const bitrate = micRate <= 24000 ? 48000 : micRate <= 32000 ? 64000 : 96000
+    const inputKey =
+      phoneMicPort > 0
+        ? hkdfSha512(shared, `DataStream-Salt${streamId}`, 'DataStream-Input-Encryption-Key', 32)
+        : null
+
+    // The Windows receiver reports the first packet it received. That anchors the media clock for
+    // /feedback and brackets the mic, which runs while audio flows.
+    this._audioById.set(receiverId, {
+      prof,
+      started: (firstSample: number) => {
+        meta.origin = { firstSample, originNs: process.hrtime.bigint() }
+        if (!inputKey || meta.micStreamId != null) return
+        const micOpts = {
+          codec: isOpus ? ('opus' as const) : ('pcm' as const),
+          payloadType: type,
+          sampleRate: micRate,
+          channels: micChannels,
+          bitrate,
+          frameMs,
+          port: phoneMicPort,
+          phone: session.peerHost,
+          device: this.cfg.audioInputDevice?.() || undefined
+        }
+        meta.micStreamId = openMicUplink(inputKey, micOpts)
+        this.emit('mic-active', true, micRate, micChannels)
+      }
+    })
+
+    // /feedback reports this stream's live media-clock anchor.
+    session.audioMeta.push(meta)
+    console.log(
+      `[cpStack] SETUP audio (type ${type}, audioType=${sd.audioType}, format=0x${fmt.toString(16)}, codec=${codec}, audioLatencyMs=${audioLatencyMs}, dataPort=${dataPort}, controlPort=${controlPort}, id=${streamId})`
+    )
+    // Echo the phone's streamConnectionID back: without it the phone
+    // can't correlate our response to its request and tears the stream back down.
+    return { type, dataPort, controlPort, streamConnectionID: streamId as PlistValue }
+  }
+
+  private async _setupDataStream(
+    sd: Record<string, PlistValue>,
+    session: CpSession
+  ): Promise<PlistValue | null> {
+    const uuid = String(sd.clientTypeUUID ?? '').toUpperCase()
+    if (uuid !== IAP_DATASTREAM_UUID) {
+      console.log(`[cpStack]   DataStream ${uuid || '(no uuid)'} not handled yet`)
+      return null
+    }
+    const shared = session.pairVerify.sharedSecret
+    if (!shared) throw new Error('iAP DataStream SETUP arrived before pair-verify')
+    const seed = sd.seed as bigint | number
+    const tunnel = new IapTunnel(shared, seed)
+    tunnel.on('iap', (iap: Buffer) => {if(!session.iapRelay)this._openIapMessageRelay(session);session.iapRelay?.write(iap)})
+    tunnel.on('open',()=>this.emit('protocol-state','iAP网络数据通道已连接',''))
+    const dataPort = await tunnel.listen()
+    session.iapTunnel = tunnel
+    console.log(`[cpStack] SETUP iAP tunnel (type 130, dataPort=${dataPort}, seed=${seed})`)
+    return { type: STREAM_TYPE_DATA, streamID: 1, dataPort }
+  }
+
+  private _openIapMessageRelay(session: CpSession): void {
+    if (session.iapRelay) return
+    this.emit('protocol-state','建立iAP网络链路','')
+    const sock = openIapRelay()
+    session.iapRelay = sock
+    const mac = session.deviceBtMac || this.cfg.phoneBtMac?.() || ''
+    const cid = session.pairVerify.controllerId ?? ''
+    console.log(`[cpStack] opening iAP relay (cid=${cid}, btMac=${mac || 'unknown'})`)
+    sock.on('data', (d: Buffer) => this._sendIapMessage(session, d))
+    sock.on('error', (e: Error) => console.warn(`[cpStack] iAP relay error: ${e.message}`))
+    sock.on('close', () => {
+      if (session.iapRelay === sock) session.iapRelay = null
+    })
+  }
+
+  private _sendIapMessage(session: CpSession, data: Buffer): void {
+    this._sendEventCommand(session, encodeBplist({ type: 'iAPSendMessage', params: { data } }))
+  }
+
+  private async _setupScreen(
+    sd: Record<string, PlistValue>,
+    session: CpSession,
+    isCluster = false
+  ): Promise<number> {
+    const shared = session.pairVerify.sharedSecret
+    if (!shared) throw new Error('screen SETUP arrived before pair-verify')
+    const streamId = sd.streamConnectionID
+    // key = HKDF-SHA512(pair-verify shared, "DataStream-Salt"<id>, "DataStream-Output-Encryption-Key").
+    const key = hkdfSha512(
+      shared,
+      `DataStream-Salt${streamId}`,
+      'DataStream-Output-Encryption-Key',
+      32
+    )
+    const codec = this.cfg.hevc ? 'h265' : 'h264'
+    const screen = new ScreenStream(key)
+    const codecEvent = isCluster ? 'cluster-video-codec' : 'video-codec'
+    const configEvent = isCluster ? 'cluster-video-config' : 'video-config'
+    const frameEvent = isCluster ? 'cluster-video-frame' : 'video-frame'
+    let firstFrame = true
+    // The stream announces its real codec from the config atom; emit it once, before any
+    // frame, so the Windows renderer configures its decoder.
+    screen.on('codec', (c: 'h264' | 'h265') => {
+      if (isCluster) {
+        if (!session.clusterCodecEmitted) {
+          this.emit(codecEvent, c)
+          session.clusterCodecEmitted = true
+        }
+      } else if (!session.codecEmitted) {
+        this.emit(codecEvent, c)
+        session.codecEmitted = true
+      }
+    })
+    // config carries the codec_data record; frames carry the decrypted length-prefixed NALs.
+    screen.on('config', (codecData: Buffer) => this.emit(configEvent, codecData))
+    screen.on('frame', (raw: Buffer): void => {
+      if (firstFrame) {
+        firstFrame = false
+        if (!isCluster && !session.mainStreamReady) {
+          session.mainStreamReady = true
+          if (this._clusterWantActive) this._activateClusterStream(session)
+        }
+      }
+      this.emit(frameEvent, raw)
+    })
+    screen.on('connected',()=>this.emit('protocol-state','视频TCP通道已连接',''))
+    screen.on('receive-error',s=>this.emit('protocol-state',s,''))
+    screen.on('ended',()=>this.emit(isCluster?'cluster-video-ended':'video-ended'))
+    const port = await screen.listen()
+    this.emit('protocol-state','视频接收端口已就绪','TCP '+port)
+    if (isCluster) session.clusterScreen = screen
+    else session.screen = screen
+    console.log(
+      `[cpStack] SETUP screen (type ${isCluster ? 111 : 110}, dataPort=${port}, codec=${codec}, id=${streamId})`
+    )
+    return port
+  }
+
+  /** Let this phone's audio streams reach the sink, or hold them back. */
+  setAudioActive(active: boolean): void {
+    this._audioActive = active
+    for (const session of this._sessionSock.keys()) {
+      for (const m of session.audioMeta) {
+        setAudioReceiverActive(m.receiverId, active)
+      }
+    }
+  }
+
+  forceMainKeyframe(): void {
+    const s = this._active
+    if (!s || !s.mainStreamReady) {
+      console.log('[cpStack] forceMainKeyframe skipped (stream not ready)')
+      return
+    }
+    console.log('[cpStack] forceKeyFrame -> main')
+    this._sendEventCommand(s, encodeBplist({ type: 'forceKeyFrame', params: { uuid: MAIN_UUID } }))
+  }
+
+  forceClusterKeyframe(): void {
+    const s = this._active
+    if (!s || !s.mainStreamReady || !this._clusterWantActive) {
+      console.log(
+        `[cpStack] forceClusterKeyframe skipped (ready=${!!s?.mainStreamReady} wantActive=${this._clusterWantActive})`
+      )
+      return
+    }
+    console.log('[cpStack] forceKeyFrame -> cluster')
+    this._sendEventCommand(s, encodeBplist({ type: 'forceKeyFrame', params: { uuid: ALT_UUID } }))
+  }
+
+  applyDisplayConfig(next: CpStackConfig): void {
+    Object.assign(this.cfg, next)
+  }
+
+  setConfigRefresh(fn: () => void): void {
+    this._configRefresh = fn
+  }
+
+  /** Ask the phone to render / stop the instrument-cluster map on the alt screen. */
+  setClusterStreamActive(active: boolean): void {
+    if (!this.cfg.cluster) return
+    this._clusterWantActive = active
+    const s = this._active
+    if (!s || !s.mainStreamReady) return
+    if (active) this._activateClusterStream(s)
+    else this._sendEventCommand(s, encodeBplist({ type: 'stopUI', params: { uuid: ALT_UUID } }))
+  }
+
+  private _activateClusterStream(s: CpSession): void {
+    this._sendEventCommand(
+      s,
+      encodeBplist({ type: 'showUI', params: { uuid: ALT_UUID, url: CLUSTER_MAP_URL } })
+    )
+    this._sendEventCommand(s, encodeBplist({ type: 'forceKeyFrame', params: { uuid: ALT_UUID } }))
+  }
+}
+
+
+
+
+export function scopePeerAddress(host:string,scope?:number){return /^fe80:/i.test(host)&&!host.includes('%')&&scope?host+'%'+scope:host}

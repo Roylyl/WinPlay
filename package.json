@@ -1,0 +1,99 @@
+{
+  "name": "winplay",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Windows CarPlay接收端",
+  "author": "Roylyl",
+  "license": "GPL-3.0-or-later",
+  "main": "src/main.cjs",
+  "scripts": {
+    "build:engine": "node scripts/prune-engine.cjs && tsc -p tsconfig.json",
+    "build:native": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1",
+    "build": "npm run build:engine && npm run build:native && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-assets.ps1",
+    "start": "electron .",
+    "test": "node --test tests/*.test.cjs",
+    "dist": "npm run build && electron-builder --win nsis --x64",
+    "postdist": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/export-installer.ps1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3",
+    "electron": "^40.0.0",
+    "electron-builder": "^26.0.12",
+    "marked": "^17.0.0"
+  },
+  "dependencies": {
+    "@noble/curves": "1.9.7",
+    "multicast-dns": "7.2.5",
+    "plist": "3.1.0"
+  },
+  "build": {
+    "appId": "io.github.roylyl.winplay",
+    "productName": "WinPlay",
+    "compression": "maximum",
+    "electronLanguages": [
+      "zh-CN",
+      "en-US"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "asarUnpack": [
+      "build/engine/**",
+      "node_modules/**"
+    ],
+    "files": [
+      "src/main.cjs",
+      "src/network-selection.cjs",
+      "src/preload.cjs",
+      "src/connection-settings.cjs",
+      "src/ui/**",
+      "build/engine/**",
+      "package.json",
+      "LICENSE",
+      "NOTICE",
+      "vendor/**",
+      "docs/**",
+      "README.md",
+      "src/close-behavior.cjs",
+      "src/display-settings.cjs",
+      "!docs/validation/**",
+      "src/system-media.cjs"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/node",
+        "to": "node"
+      },
+      {
+        "from": "build/native",
+        "to": "native"
+      },
+      {
+        "from": "resources/node-LICENSE",
+        "to": "node-LICENSE"
+      },
+      {
+        "from": "resources/icons",
+        "to": "icons"
+      },
+      {
+        "from": "resources/authentication",
+        "to": "authentication"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "resources/icons/winplay.ico",
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "artifactName": "WinPlay-${version}-Setup-${arch}.exe",
+      "include": "scripts/installer.nsh"
+    }
+  }
+}

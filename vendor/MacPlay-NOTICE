@@ -1,0 +1,20 @@
+MacPlay 1.1.0
+
+Based on LIVI: https://github.com/f-io/LIVI
+Original author: Lasse Heitgres and LIVI contributors.
+LIVI package metadata declares GPL-3.0-or-later. See LICENSE.
+MacPlay modifications: desktop identity, local authentication provider,
+macOS RFCOMM bridge, direct USB startup, independent service port,
+display presets, fixed physical-size video windows, trackpad gesture input and dedicated accessory identities,
+native SwiftUI settings and AppKit window.
+
+Protocol implementation references:
+DiPlay: https://github.com/shihabal3amri/DiPlay
+
+Node.js, GStreamer, Rust crates and other bundled libraries retain
+ their respective copyrights and licenses. See their source packages and
+bundled dependency notices. No Apple endorsement or certification is claimed.
+Version 1.1.0 includes experimental authentication files originating from the
+DiPlay 0.2.6 APK (assets/offline-mfi). Redistribution authorization has not
+been independently established. Their inclusion does not confer Apple/MFi
+certification or transfer rights through the application code license.

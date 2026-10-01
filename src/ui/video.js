@@ -1,0 +1,17 @@
+let viewport;function pixelViewport(){if(!viewport)return;const scale=window.devicePixelRatio||1;document.body.style.width=viewport.width/scale+'px';document.body.style.height=viewport.height/scale+'px';canvas.style.width=viewport.width/scale+'px';canvas.style.height=viewport.height/scale+'px'}
+const canvas=document.getElementById('screen'),ctx=canvas.getContext('2d',{alpha:false});let count=0,lastStats=performance.now(),visible=false,decodedWidth=1280,decodedHeight=720;
+const receiver=new WinPlayVideoReceiver({Decoder:VideoDecoder,Chunk:EncodedVideoChunk,requestKey:()=>winplay.input({command:'request-keyframe'}),fail:reason=>winplay.input({command:'decode-error',reason}),recover:reason=>winplay.input({command:'video-recovery',reason}),output(frame){decodedWidth=frame.displayWidth;decodedHeight=frame.displayHeight;if(canvas.width!==decodedWidth||canvas.height!==decodedHeight){canvas.width=decodedWidth;canvas.height=decodedHeight}ctx.drawImage(frame,0,0,canvas.width,canvas.height);count++;if(!visible){visible=true;winplay.input({command:'video-visible'})}}});
+window.addEventListener('unload',()=>receiver.close());
+window.addEventListener('resize',pixelViewport);
+winplay.on(m=>{if(m.type==='video-viewport'){viewport=m;pixelViewport()}if(m.type==='video-config')receiver.configure(m);if(m.type==='video-frame'){receiver.decode(m);winplay.input({command:'video-ack'})}});
+let dragging=false,last={x:.5,y:.5},wheelActive=false,wheelTimer,wheelFrame,wheelX=0,wheelY=0;
+const touch=(p,down)=>winplay.input({command:'touch',x:p.x,y:p.y,down});
+function point(e,clamp=false){return winplayGeometry.coordinates(e.clientX,e.clientY,canvas.getBoundingClientRect(),decodedWidth,decodedHeight,clamp)}
+canvas.addEventListener('pointerdown',e=>{if(e.button!==0)return;const p=point(e);if(!p)return;endWheel();dragging=true;last=p;canvas.setPointerCapture(e.pointerId);touch(p,true)});
+canvas.addEventListener('pointermove',e=>{const p=point(e,dragging);if(p)last=p;if(dragging&&p)touch(p,true)});
+function release(){if(dragging){dragging=false;touch(last,false)}}
+canvas.addEventListener('pointerup',release);canvas.addEventListener('pointercancel',release);canvas.addEventListener('lostpointercapture',release);window.addEventListener('blur',()=>{release();endWheel()});
+function endWheel(){clearTimeout(wheelTimer);cancelAnimationFrame(wheelFrame);wheelFrame=0;wheelX=wheelY=0;if(wheelActive){wheelActive=false;touch(last,false)}}
+canvas.addEventListener('wheel',e=>{e.preventDefault();if(dragging)return;const p=point(e);if(!p)return;if(!wheelActive){last=p;wheelActive=true;touch(last,true)}const area=winplayGeometry.contentRect(canvas.clientWidth,canvas.clientHeight,decodedWidth,decodedHeight),delta=winplayGeometry.wheelDelta(e.deltaX,e.deltaY,e.deltaMode,area.width,area.height,window.devicePixelRatio||1);wheelX+=delta.x;wheelY+=delta.y;if(!wheelFrame)wheelFrame=requestAnimationFrame(()=>{wheelFrame=0;last={x:Math.max(.02,Math.min(.98,last.x-Math.max(-.04,Math.min(.04,wheelX)))),y:Math.max(.02,Math.min(.98,last.y-Math.max(-.04,Math.min(.04,wheelY))))};wheelX=wheelY=0;touch(last,true)});clearTimeout(wheelTimer);wheelTimer=setTimeout(endWheel,180)},{passive:false});
+window.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();winplay.input({command:'video-minimize'})}});setInterval(()=>{const now=performance.now();if(now-lastStats>=1000){winplay.input({command:'decoded',fps:count*1000/(now-lastStats),width:decodedWidth,height:decodedHeight});count=0;lastStats=now}},1000);
+

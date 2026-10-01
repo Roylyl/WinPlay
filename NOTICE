@@ -1,0 +1,22 @@
+WinPlay 1.1.0 — Roylyl
+GPL-3.0-or-later; see LICENSE.
+
+CarPlay control, pairing, encryption, plist and HID implementation adapted from
+Roylyl/MacPlay, based on f-io/LIVI (Lasse Heitgres and contributors).
+Wireless iAP2 identification and handoff adapted from Roylyl/AndroidPlay,
+based on shihabal3amri/DiPlay. Original source comments are retained.
+See vendor/MacPlay-NOTICE and docs/SOURCE-AUDIT.md.
+
+No Apple endorsement or MFi certification is claimed. This locally built installation package embeds the authentication pair supplied
+by the user. Credentials require separate redistribution authorization. MacPlay NOTICE
+traces historical experimental credentials to DiPlay 0.2.6 APK; redistribution
+authorization remains unestablished. GPL licensing of application code does not
+grant rights to authentication credentials.
+
+Electron (MIT), Chromium/FFmpeg and Node.js have their own bundled license texts.
+@noble/curves (MIT), multicast-dns (MIT), plist (MIT) retain their licenses.
+Wireless reception uses Windows Bluetooth and Wi-Fi; no Apple drivers are required.
+
+The WinPlay icon is adapted from the AndroidPlay/MacPlay icon design family:
+dark rounded tile, light-blue screen and play mark, with original CRT-style
+monitor, pedestal, power light and four-pane window artwork. SVG source included.

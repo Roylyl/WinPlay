@@ -1,0 +1,3 @@
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}canvas{width:100%;height:100%;object-fit:contain;display:block;touch-action:none;user-select:none}
+
+.window-controls{position:fixed;z-index:2;top:0;right:0;display:flex;opacity:0;transition:opacity .15s}.window-controls:hover,body:hover .window-controls,.window-controls:focus-within{opacity:1}.window-controls button{width:36px;height:28px;border:0;color:white;background:#202020bb;font:20px Segoe UI;cursor:pointer}.window-controls button:hover{background:#444}.window-controls #close-video:hover{background:#b72727}
