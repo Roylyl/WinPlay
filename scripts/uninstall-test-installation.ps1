@@ -11,7 +11,7 @@ foreach($location in ($locations | Select-Object -Unique)){
  $uninstaller=Join-Path $installedRoot 'Uninstall WinPlay.exe'
  if(!(Test-Path -LiteralPath $uninstaller -PathType Leaf)){continue}
  $installedExe=Join-Path $installedRoot 'WinPlay.exe'
- Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'WinPlay.exe' -and $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath).StartsWith($installedRoot+'\',[StringComparison]::OrdinalIgnoreCase) } | ForEach-Object {Stop-Process -Id $_.ProcessId -ErrorAction Stop}
+ Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'WinPlay.exe' -and $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath).StartsWith($installedRoot+'\',[StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { $winPlayProcessId=$_.ProcessId; try {Stop-Process -Id $winPlayProcessId -ErrorAction Stop} catch {if(Get-Process -Id $winPlayProcessId -ErrorAction SilentlyContinue){throw}} }
  $process=Start-Process -FilePath $uninstaller -ArgumentList '/S' -WindowStyle Hidden -PassThru -Wait
  if($process.ExitCode -ne 0){throw ('WinPlay uninstaller failed, exit code: '+$process.ExitCode)}
  $deadline=[DateTime]::UtcNow.AddSeconds(20)
