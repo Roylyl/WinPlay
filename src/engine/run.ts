@@ -64,7 +64,7 @@ async function begin(cfg:any){settings=cfg;currentFps=cfg.fps;stopRequested=fals
  ticker=setInterval(()=>{send({type:'metrics',requested:settings.fps,attempt:currentFps,receivedFps:receivedFrames});receivedFrames=0;if(playing)send({type:'position',positionMs:playing.position()})},1000)
  send({type:'started',requested:cfg.fps});status(cfg.wirelessMode==='lan'?'局域网接收已启动，请确认两端在同一Wi-Fi':'本机热点接收已启动，请让iPhone接入Windows移动热点')
 }
-function shutdown(){if(stopRequested)return;stopRequested=true;guard?.cancel();if(videoRecovery)clearTimeout(videoRecovery);if(ticker)clearInterval(ticker);if(videoDeadline)clearTimeout(videoDeadline);for(const stack of [...sessions])stack.stop();sessions.clear();accessory?.close();setIapRelayFactory(undefined);bluetooth?.kill();closeMedia();bonjour?.destroy();server?.close();hadVideo=false;send({type:'stopped'});setTimeout(()=>process.exit(0),250).unref()}
+function shutdown(){if(stopRequested)return;stopRequested=true;playing?.close();guard?.cancel();if(videoRecovery)clearTimeout(videoRecovery);if(ticker)clearInterval(ticker);if(videoDeadline)clearTimeout(videoDeadline);for(const stack of [...sessions])stack.stop();sessions.clear();accessory?.close();setIapRelayFactory(undefined);bluetooth?.kill();closeMedia();bonjour?.destroy();server?.close();hadVideo=false;send({type:'stopped'});setTimeout(()=>process.exit(0),250).unref()}
 process.on('message',async(msg:any)=>{try{
  if(msg.command==='start')await begin(msg.settings)
  if(msg.command==='stop')shutdown()
