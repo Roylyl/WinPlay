@@ -3,6 +3,8 @@
  class Timeline {
   constructor(rate,delay){this.rate=rate;this.delay=delay;this.reset()}
   reset(){this.origin=null;this.end=0;this.offset=-1}
+  anchor(now){this.origin=now+this.delay}
+  ready(offset,now,lead){return this.origin!==null&&this.origin+offset/this.rate-now<=lead}
   plan(offset,duration,now){if(!Number.isFinite(offset)||!Number.isFinite(duration)||duration<=0||offset<=this.offset)return null;
    let reset=false;if(this.origin===null){this.origin=now+this.delay-offset/this.rate;reset=true}
    let expected=this.origin+offset/this.rate;
