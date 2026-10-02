@@ -6,6 +6,6 @@
 
 !macro customInstall
   FileOpen $0 "$INSTDIR\VERSION.txt" w
-  FileWrite $0 "WinPlay 1.1.0"
+  FileWrite $0 "WinPlay ${VERSION}"
   FileClose $0
 !macroend

@@ -18,12 +18,15 @@ const HEADER_LEN = 128
 const OP_VIDEO_FRAME = 0
 const OP_VIDEO_CONFIG = 1
 const MAX_BODY = 8 * 1024 * 1024
+const MAX_ACC = 16 * 1024 * 1024
 
 export class ScreenStream extends EventEmitter {
   private _server: net.Server | null = null
   private _counter = 0n
   private lastConfig: Buffer | undefined
   private sockets = new Set<net.Socket>()
+  private paused = false
+  private drainers = new Map<net.Socket, () => void>()
 
   constructor(private readonly key: Buffer) {
     super()
@@ -45,20 +48,32 @@ export class ScreenStream extends EventEmitter {
   stop(): void {
     for(const s of this.sockets)s.destroy()
     this.sockets.clear()
+    this.drainers.clear()
     this._server?.close()
     this._server = null
+  }
+
+  setPaused(paused:boolean):void {
+    this.paused=paused
+    for(const socket of this.sockets){
+      if(paused)socket.pause()
+      else{this.drainers.get(socket)?.();if(!this.paused&&!socket.destroyed)socket.resume()}
+    }
   }
 
   private _onConnection(sock: net.Socket): void {
     console.log(`[cpScreen] video data connection from ${sock.remoteAddress}:${sock.remotePort}`)
     if(this.sockets.size){sock.destroy();return}
     this.sockets.add(sock)
+    if(this.paused)sock.pause()
     this._counter = 0n
     this.emit('connected')
     let acc = Buffer.alloc(0)
-    sock.on('data', (chunk: Buffer) => {
-      acc = Buffer.concat([acc, chunk])
-      for (;;) {
+    let draining=false
+    const drain=()=>{
+      if(draining)return
+      draining=true
+      try{while(!this.paused&&!sock.destroyed){
         if (acc.length < HEADER_LEN) break
         const bodySize = acc.readUInt32LE(0)
         if (bodySize > MAX_BODY) {
@@ -78,10 +93,16 @@ export class ScreenStream extends EventEmitter {
           sock.destroy()
           return
         }
-      }
+      }}finally{draining=false}
+    }
+    this.drainers.set(sock,drain)
+    sock.on('data', (chunk: Buffer) => {
+      if(acc.length+chunk.length>MAX_ACC){this.emit('receive-error','视频接收缓冲超限');sock.destroy();return}
+      acc = Buffer.concat([acc, chunk])
+      drain()
     })
     sock.on('error', (err) => console.warn(`[cpScreen] socket error: ${err.message}`))
-    sock.on('close', () => {this.sockets.delete(sock);this.emit('ended')})
+    sock.on('close', () => {this.sockets.delete(sock);this.drainers.delete(sock);this.emit('ended')})
   }
 
   private _onMessage(header: Buffer, body: Buffer): void {

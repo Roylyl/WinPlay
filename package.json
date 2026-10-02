@@ -1,6 +1,6 @@
 {
   "name": "winplay",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "Windows CarPlay接收端",
   "author": "Roylyl",
@@ -30,9 +30,11 @@
   "build": {
     "appId": "io.github.roylyl.winplay",
     "productName": "WinPlay",
+    "electronDist": "node_modules/electron/dist",
     "compression": "maximum",
     "electronLanguages": [
       "zh-CN",
+      "zh-TW",
       "en-US"
     ],
     "directories": {
@@ -58,7 +60,11 @@
       "src/close-behavior.cjs",
       "src/display-settings.cjs",
       "!docs/validation/**",
-      "src/system-media.cjs"
+      "src/system-media.cjs",
+      "src/updates.cjs",
+      "src/diagnostic-redactor.cjs",
+      "src/wlan-reader.cjs",
+      "src/mobile-hotspot-reader.cjs"
     ],
     "extraResources": [
       {

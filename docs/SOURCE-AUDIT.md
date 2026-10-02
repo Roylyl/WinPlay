@@ -24,4 +24,8 @@ Windows音频接收直接使用UDP接收器，视频直接使用`ScreenStream`�
 
 保留AndroidPlay、MacPlay、LIVI和DiPlay的来源注释、许可证与项目介绍；它们不是运行平台字段。`btMac`和`apMac`表示蓝牙或接入点的MAC地址，AirPlay服务名、协议版本、UUID、音频格式位和HID描述符属于协议兼容数据，不能作为平台残留删除。
 
+iPhone端识别字段包括iAP配件名称/型号、Bonjour服务名称/TXT型号、CarPlay`/info`名称/车型及OEM标签，统一为WinPlay。协议检查直接解析生成的iAP消息与二进制plist，不通过README推断车型。
+
+同步参考MacPlay1.2.0的完整会话TEARDOWN收尾、页面排布与关于页更新入口；Windows热点按ICS私有共享接口检测，日志在保存、打开和导出时统一脱敏。AndroidPlay新版本的AGPL实现没有直接复制进WinPlay。
+
 本次通过本机编译、加密音视频协议检查及合成窗口检查验证。无线真机测试仍由用户进行，不将合成检查表述为真实iPhone连接验证。

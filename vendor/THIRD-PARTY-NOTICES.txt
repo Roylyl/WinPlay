@@ -1,4 +1,4 @@
-WinPlay 1.1.0 third-party notices
+WinPlay 1.2.0 third-party notices
 
 Generated from installed production packages.
 Electron 40.10.6 (MIT) and its Chromium components retain LICENSE and LICENSES.chromium.html in the application distribution. Node.js 24.19.0 and its embedded components retain resources/node-LICENSE.

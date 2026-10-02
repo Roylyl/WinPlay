@@ -30,12 +30,26 @@ class Platform {
 
  [StructLayout(LayoutKind.Sequential)] struct Rect {public int left,top,right,bottom;}
  [StructLayout(LayoutKind.Sequential)] struct MonitorInfo {public int size;public Rect monitor,work;public uint flags;}
+ delegate bool MonitorEnumProc(IntPtr monitor,IntPtr dc,ref Rect bounds,IntPtr data);
+ [DllImport("user32.dll",SetLastError=true)]static extern bool EnumDisplayMonitors(IntPtr dc,IntPtr clip,MonitorEnumProc callback,IntPtr data);
  [DllImport("user32.dll",SetLastError=true)]static extern bool SetProcessDpiAwarenessContext(IntPtr context);
  [DllImport("user32.dll")]static extern IntPtr MonitorFromWindow(IntPtr window,uint flags);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)]static extern bool GetMonitorInfo(IntPtr monitor,ref MonitorInfo info);
  [DllImport("user32.dll")]static extern bool GetWindowRect(IntPtr window,out Rect rect);
  [DllImport("user32.dll")]static extern bool GetClientRect(IntPtr window,out Rect rect);
  [DllImport("user32.dll",SetLastError=true)]static extern bool SetWindowPos(IntPtr window,IntPtr insertAfter,int x,int y,int cx,int cy,uint flags);
+ static void Monitors(){
+  SetProcessDpiAwarenessContext(new IntPtr(-4));
+  var items=new List<object>();
+  MonitorEnumProc callback=delegate(IntPtr monitor,IntPtr dc,ref Rect bounds,IntPtr data){
+   var info=new MonitorInfo{size=Marshal.SizeOf(typeof(MonitorInfo))};
+   if(!GetMonitorInfo(monitor,ref info))return false;
+   items.Add(new{x=info.monitor.left,y=info.monitor.top,width=info.monitor.right-info.monitor.left,height=info.monitor.bottom-info.monitor.top,primary=(info.flags&1)!=0,workArea=new{x=info.work.left,y=info.work.top,width=info.work.right-info.work.left,height=info.work.bottom-info.work.top}});
+   return true;
+  };
+  if(!EnumDisplayMonitors(IntPtr.Zero,IntPtr.Zero,callback,IntPtr.Zero)||items.Count==0)throw new Exception("无法读取显示器物理像素，Windows错误码="+Marshal.GetLastWin32Error());
+  Console.Write(new JavaScriptSerializer().Serialize(new{items=items}));
+ }
  static void WindowMetrics(string[] args){SetProcessDpiAwarenessContext(new IntPtr(-4));Rect client;if(!GetClientRect(new IntPtr(long.Parse(args[1])),out client))throw new Exception("无法读取窗口物理像素");Console.Write(new JavaScriptSerializer().Serialize(new{clientWidth=client.right-client.left,clientHeight=client.bottom-client.top}));}
  static void WindowPixels(string[] args){SetProcessDpiAwarenessContext(new IntPtr(-4));var window=new IntPtr(long.Parse(args[1]));var width=int.Parse(args[2]);var height=int.Parse(args[3]);var info=new MonitorInfo{size=Marshal.SizeOf(typeof(MonitorInfo))};if(!GetMonitorInfo(MonitorFromWindow(window,2),ref info))throw new Exception("无法读取CarPlay窗口所在显示器");int mw=info.monitor.right-info.monitor.left,mh=info.monitor.bottom-info.monitor.top;if(width<320||height<200||width>mw||height>mh)throw new Exception("请求像素超出显示器物理分辨率");int x=info.monitor.left+(mw-width)/2,y=info.monitor.top+(mh-height)/2;if(!SetWindowPos(window,IntPtr.Zero,x,y,width,height,0x14))throw new Exception("无法设置CarPlay物理像素尺寸");Rect client;if(!GetClientRect(window,out client))throw new Exception("无法读取CarPlay画面物理尺寸");int cw=client.right-client.left,ch=client.bottom-client.top;if(cw!=width||ch!=height){if(!SetWindowPos(window,IntPtr.Zero,x,y,width+width-cw,height+height-ch,0x14)||!GetClientRect(window,out client))throw new Exception("无法校正CarPlay画面物理尺寸");cw=client.right-client.left;ch=client.bottom-client.top;}if(cw!=width||ch!=height)throw new Exception("CarPlay画面物理像素尺寸与请求不一致："+cw+"x"+ch+"，请求"+width+"x"+height);Rect outer;if(!GetWindowRect(window,out outer))throw new Exception("无法读取窗口边框尺寸");bool full=width==mw&&height==mh;int ow=outer.right-outer.left,oh=outer.bottom-outer.top;if(!full&&(ow>info.work.right-info.work.left||oh>info.work.bottom-info.work.top))throw new Exception("请求像素加上系统标题栏后超出屏幕可用区域，请选择较小分辨率或屏幕原生像素");if(!full){x=info.work.left+(info.work.right-info.work.left-ow)/2;y=info.work.top+(info.work.bottom-info.work.top-oh)/2;SetWindowPos(window,IntPtr.Zero,x,y,ow,oh,0x15);}Console.Write(new JavaScriptSerializer().Serialize(new{clientWidth=cw,clientHeight=ch,monitorWidth=mw,monitorHeight=mh,x=x,y=y,fullScreen=width==mw&&height==mh}));}
 
@@ -53,7 +67,7 @@ class Platform {
   var input=Console.OpenStandardInput();var output=Console.OpenStandardOutput();var tx=new Thread(()=>{try{var b=new byte[65536];int n;while((n=input.Read(b,0,b.Length))>0){int offset=0;while(offset<n){var block=new byte[n-offset];Buffer.BlockCopy(b,offset,block,0,block.Length);int done=send(s,block,block.Length,0);if(done<=0)return;offset+=done;}}}finally{closesocket(s);}});tx.IsBackground=true;tx.Start();
   var rx=new byte[65536];int count;while((count=recv(s,rx,rx.Length,0))>0){output.Write(rx,0,count);output.Flush();}
  }finally{closesocket(s);}}
- static int Main(string[] args){Console.OutputEncoding=new UTF8Encoding(false);try{if(args.Length==0)return 2;if(args[0]=="window-metrics"){WindowMetrics(args);return 0;}if(args[0]=="window-pixels"){WindowPixels(args);return 0;}if(args[0]=="list"){List();return 0;}if(args[0]=="bluetooth"){Bluetooth(args[1]);return 0;}
+ static int Main(string[] args){Console.OutputEncoding=new UTF8Encoding(false);try{if(args.Length==0)return 2;if(args[0]=="monitors"){Monitors();return 0;}if(args[0]=="window-metrics"){WindowMetrics(args);return 0;}if(args[0]=="window-pixels"){WindowPixels(args);return 0;}if(args[0]=="list"){List();return 0;}if(args[0]=="bluetooth"){Bluetooth(args[1]);return 0;}
   if(args[0]=="protect"||args[0]=="unprotect"){var m=new MemoryStream();Console.OpenStandardInput().CopyTo(m);var data=args[0]=="protect"?ProtectedData.Protect(m.ToArray(),null,DataProtectionScope.CurrentUser):ProtectedData.Unprotect(m.ToArray(),null,DataProtectionScope.CurrentUser);Console.OpenStandardOutput().Write(data,0,data.Length);return 0;}return 2;
  }catch(Exception e){Console.Error.Write(e.Message);return 1;}}
 }

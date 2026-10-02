@@ -163,6 +163,9 @@ interface CpSession {
   mainStreamReady: boolean
   lastCtrlReadNs: bigint
   heartbeat: ReturnType<typeof setInterval> | null
+  /** A session-level TEARDOWN can arrive while its control socket stays open. */
+  endRequested: boolean
+  ended: boolean
 }
 
 export class CpStack extends EventEmitter {
@@ -188,6 +191,7 @@ export class CpStack extends EventEmitter {
   private _speechActive = false
   /** True while this phone is the one whose audio reaches the sink. */
   private _audioActive = false
+  private _mainVideoPaused = false
   /** The Windows audio receivers, so its start report finds the right stream. */
   private readonly _audioById = new Map<
     number,
@@ -245,7 +249,9 @@ export class CpStack extends EventEmitter {
       codecEmitted: false,
       mainStreamReady: false,
       lastCtrlReadNs: process.hrtime.bigint(),
-      heartbeat: null
+      heartbeat: null,
+      endRequested: false,
+      ended: false
     }
     this._sessionSock.set(session, sock)
     // Requests of one connection are processed one after another.
@@ -283,7 +289,10 @@ export class CpStack extends EventEmitter {
           }
           const wire=session.cipher ? session.cipher.encrypt(out) : out
           if(req.method==='RECORD')sock.write(wire,()=>{if(!sock.destroyed)this._recordResponseWritten(session)})
-          else sock.write(wire)
+          else if (req.method === 'TEARDOWN' && session.endRequested) {
+            // Queue the reply first. The host may stop the stack when notified.
+            sock.write(wire, () => setImmediate(() => this._notifySessionEnded(session)))
+          } else sock.write(wire)
           // pair-verify M4 is answered in plaintext; encryption starts on the next message.
           if (!session.cipher && session.pairVerify.controlKeys) {
             const k = session.pairVerify.controlKeys
@@ -299,11 +308,17 @@ export class CpStack extends EventEmitter {
       this._conns.delete(sock)
       this._sessionSock.delete(session)
       this._teardown(session)
-      if (!this._closing) {
-        if(session===this._liveSession)this._liveSession = null
-        this.emit('session-ended')
-      }
+      this._notifySessionEnded(session)
     })
+  }
+
+  private _notifySessionEnded(session: CpSession): void {
+    if (this._closing || session.ended) return
+    session.ended = true
+    // Closing a rejected/background control connection must not end a live one.
+    if (this._liveSession && session !== this._liveSession) return
+    if (session === this._liveSession) this._liveSession = null
+    this.emit('session-ended')
   }
 
   private _teardown(session: CpSession): void {
@@ -384,6 +399,7 @@ export class CpStack extends EventEmitter {
     }
     if (types.length === 0) {
       console.log('[cpStack] TEARDOWN (session)')
+      session.endRequested = true
       this._teardown(session)
       return { status: 200 }
     }
@@ -1092,7 +1108,7 @@ export class CpStack extends EventEmitter {
     const port = await screen.listen()
     this.emit('protocol-state','视频接收端口已就绪','TCP '+port)
     if (isCluster) session.clusterScreen = screen
-    else session.screen = screen
+    else {session.screen = screen;screen.setPaused(this._mainVideoPaused)}
     console.log(
       `[cpStack] SETUP screen (type ${isCluster ? 111 : 110}, dataPort=${port}, codec=${codec}, id=${streamId})`
     )
@@ -1107,6 +1123,12 @@ export class CpStack extends EventEmitter {
         setAudioReceiverActive(m.receiverId, active)
       }
     }
+  }
+
+  /** Backpressure only the main video TCP data socket, never control or audio. */
+  setMainVideoBackpressure(paused:boolean):void {
+    this._mainVideoPaused=paused
+    for(const session of this._sessionSock.keys())session.screen?.setPaused(paused)
   }
 
   forceMainKeyframe(): void {

@@ -5,7 +5,8 @@ $ErrorActionPreference='Stop'
 $principal=[Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
 if(!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Administrator permission is required for Windows Defender performance recording.'}
 $desktopPath=[Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)
-$installerPath=Join-Path $desktopPath 'WinPlay-1.1.0-Setup-x64.exe'
+$packageInfo=Get-Content -LiteralPath (Join-Path $PSScriptRoot '../package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$installerPath=Join-Path $desktopPath ('WinPlay-'+$packageInfo.version+'-Setup-x64.exe')
 if(!(Test-Path -LiteralPath $installerPath -PathType Leaf)){throw 'Desktop installer was not found.'}
 $outputFolder=Join-Path $env:TEMP 'WinPlay-installer-diagnosis'
 New-Item -ItemType Directory -Path $outputFolder -Force | Out-Null
