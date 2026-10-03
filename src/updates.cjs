@@ -28,24 +28,32 @@ function safeLink(value, expectedPath) {
     return url.href;
   } catch { return null; }
 }
-function releasePage(version, rawPage) {
-  const pagePath = `/Roylyl/WinPlay/releases/tag/WinPlay-${version}`;
+function tagVersion(tag) {
+  if (typeof tag !== 'string') return null;
+  const match = /^(?:[Vv]|WinPlay-)?(.+)$/.exec(tag);
+  return match && versionParts(match[1]) ? match[1] : null;
+}
+function releasePage(tag, rawPage) {
+  const pagePath = `/Roylyl/WinPlay/releases/tag/${tag}`;
   return safeLink(rawPage, pagePath) || `https://github.com${pagePath}`;
 }
-function installerLink(version, assets) {
+function installerLink(version, tag, assets) {
   if (!Array.isArray(assets)) return null;
   const name = `WinPlay-${version}-Setup-x64.exe`;
   const asset = assets.find(item => item && item.name === name &&
-    safeLink(item.browser_download_url, `/Roylyl/WinPlay/releases/download/WinPlay-${version}/${name}`));
-  return asset ? safeLink(asset.browser_download_url, `/Roylyl/WinPlay/releases/download/WinPlay-${version}/${name}`) : null;
+    safeLink(item.browser_download_url, `/Roylyl/WinPlay/releases/download/${tag}/${name}`));
+  return asset ? safeLink(asset.browser_download_url, `/Roylyl/WinPlay/releases/download/${tag}/${name}`) : null;
 }
 function validCachedRelease(raw, current) {
   if (!raw || compareVersions(raw.version, current) !== 1) return null;
+  const tag = raw.tag === undefined ? `WinPlay-${raw.version}` : raw.tag;
+  if (tagVersion(tag) !== raw.version) return null;
   const name = `WinPlay-${raw.version}-Setup-x64.exe`;
   return {
     version: raw.version,
-    page: releasePage(raw.version, raw.page),
-    installer: safeLink(raw.installer, `/Roylyl/WinPlay/releases/download/WinPlay-${raw.version}/${name}`)
+    tag,
+    page: releasePage(tag, raw.page),
+    installer: safeLink(raw.installer, `/Roylyl/WinPlay/releases/download/${tag}/${name}`)
   };
 }
 async function readLimitedJSON(response, signal) {
@@ -161,10 +169,10 @@ class Updates {
       const raw = await readLimitedJSON(response, controller.signal);
       if (!Array.isArray(raw)) throw new Error('invalid-response');
       const releases = raw.slice(0, 100).flatMap(item => {
-        if (!item || item.draft !== false || item.prerelease !== false || typeof item.tag_name !== 'string' || !item.tag_name.startsWith('WinPlay-')) return [];
-        const version = item.tag_name.slice('WinPlay-'.length);
-        if (!versionParts(version)) return [];
-        return [{version, page: releasePage(version, item.html_url), installer: installerLink(version, item.assets)}];
+        if (!item || item.draft !== false || item.prerelease !== false) return [];
+        const tag = item.tag_name, version = tagVersion(tag);
+        if (!version) return [];
+        return [{version, tag, page: releasePage(tag, item.html_url), installer: installerLink(version, tag, item.assets)}];
       });
       releases.sort((a, b) => compareVersions(b.version, a.version) || Number(!!b.installer) - Number(!!a.installer));
       const latest = releases[0];

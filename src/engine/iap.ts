@@ -45,7 +45,7 @@ const text=(b?:Buffer)=>b?.toString('utf8').replace(/\0.*$/s,'')||''
 export function identification(cfg:Handoff){
  const sent=[0xaa01,0xaa03,0x5000,0x5002,0x5003,0x5200,0x5203,0xae00,0xae02,0x4157,0x4159,0x4154,0x4156,0x4301,0x5703]
  const received=[0xaa00,0xaa02,0xaa04,0xaa05,0xea00,0xea01,0x5001,0x5201,0x5202,0xae01,0x4158,0x4155,0x4300,0x4e0d,0x4e0e,0x5702]
- const p=[...['WinPlay','WinPlay','Roylyl',cfg.serial,'1.2.0','1.0'].map((s,i)=>param(i,str(s))),param(6,Buffer.concat(sent.map(u16))),param(7,Buffer.concat(received.map(u16))),param(8,Buffer.from([0])),param(9,u16(20)),param(10,Buffer.concat([param(0,Buffer.from([1])),param(1,str('io.github.roylyl.winplay')),param(2,Buffer.from([0]))])),param(12,str('en')),param(13,str('en'))]
+ const p=[...['WinPlay','WinPlay','Roylyl',cfg.serial,'1.2.1','1.0'].map((s,i)=>param(i,str(s))),param(6,Buffer.concat(sent.map(u16))),param(7,Buffer.concat(received.map(u16))),param(8,Buffer.from([0])),param(9,u16(20)),param(10,Buffer.concat([param(0,Buffer.from([1])),param(1,str('io.github.roylyl.winplay')),param(2,Buffer.from([0]))])),param(12,str('en')),param(13,str('en'))]
  p.push(param(17,Buffer.concat([param(0,u16(0)),param(1,str('blue')),param(2),param(3,Buffer.from(cfg.btMac.replaceAll(':',''),'hex')),param(4,str('blue')),param(5)])),param(24,Buffer.concat([param(0,u16(1)),param(1,str(cfg.ssid)),param(2),param(3,u16(1)),param(4),param(5)])))
  return csm(0x1d01,p)
 }

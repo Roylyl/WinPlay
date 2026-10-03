@@ -21,6 +21,25 @@ function release(version, extra = {}) {
 }
 function response(items) { return new Response(JSON.stringify(items), {status: 200}); }
 
+test('unified V/v tags retain their actual download paths and survive cached restart', async t => {
+  for (const tag of ['V1.2.0','v1.2.0','WinPlay-1.2.0','1.2.0']) {
+    const dir=directory(t), name='WinPlay-1.2.0-Setup-x64.exe';
+    const page=`https://github.com/Roylyl/WinPlay/releases/tag/${tag}`;
+    const installer=`https://github.com/Roylyl/WinPlay/releases/download/${tag}/${name}`;
+    const updates=new Updates({version:'1.1.0',dataDir:dir,fetchImpl:async()=>response([release('1.2.0',{tag_name:tag,html_url:page,assets:[{name,browser_download_url:installer}]})])});
+    const state=await updates.check();assert.equal(state.status,'发现新版本');assert.equal(state.release.version,'1.2.0');assert.equal(updates.releaseUrl(),page);assert.equal(updates.downloadUrl(),installer);
+    const restored=new Updates({version:'1.1.0',dataDir:dir});assert.equal(restored.downloadUrl(),installer);assert.equal(restored.releaseUrl(),page);
+  }
+});
+
+test('V tags reject mismatched asset tags, prereleases and malformed numeric versions', async t => {
+  const updates=new Updates({version:'1.1.0',dataDir:directory(t),fetchImpl:async()=>response([
+    release('9.0.0',{tag_name:'V9.0.0',prerelease:true}),release('8.0.0',{tag_name:'V8.0.0-beta'}),release('7.0.0',{tag_name:'V07.0.0'}),
+    release('1.2.0',{tag_name:'V1.2.0',html_url:'https://evil.example/'})
+  ])});
+  await updates.check();assert.equal(updates.state().release.version,'1.2.0');assert.equal(updates.state().release.installer,null);assert.equal(updates.releaseUrl(),'https://github.com/Roylyl/WinPlay/releases/tag/V1.2.0');
+});
+
 test('uses only WinPlay releases, compares numeric versions and excludes nonstable tags', async t => {
   const changes = [], calls = [];
   const updates = new Updates({version: '1.1.0', dataDir: directory(t), onChange: state => changes.push(state), fetchImpl: async (url, options) => {
