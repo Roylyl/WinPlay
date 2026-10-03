@@ -13,6 +13,7 @@ app.whenReady().then(async()=>{
  win.showInactive();await new Promise(r=>setTimeout(r,250));
  const dom=await win.webContents.executeJavaScript(`({h1:document.querySelectorAll('h1').length,h2:document.querySelectorAll('h2').length,tables:document.querySelectorAll('table').length,strong:document.querySelectorAll('strong').length,lists:document.querySelectorAll('ol,ul').length,images:[...document.images].map(i=>({src:i.getAttribute('src'),loaded:i.complete&&i.naturalWidth>0})),horizontalOverflow:document.documentElement.scrollWidth>innerWidth})`);
  const dir=path.join(root,'docs/validation');
+ fs.mkdirSync(dir,{recursive:true});
  fs.writeFileSync(path.join(dir,'readme-desktop.png'),(await win.webContents.capturePage()).toPNG());
  win.setSize(520,850);await new Promise(r=>setTimeout(r,200));
  const narrow=await win.webContents.executeJavaScript(`({horizontalOverflow:document.documentElement.scrollWidth>innerWidth,tableOverflow:[...document.querySelectorAll('table')].some(t=>t.getBoundingClientRect().right>innerWidth)})`);

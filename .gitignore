@@ -12,9 +12,8 @@
 *.log
 *.blockmap
 
-# Generated validation output; retain the record referenced by the README
-/docs/validation/*
-!/docs/validation/phone-video-20261002.json
+# Generated validation output
+/docs/validation/
 
 # Authentication material and private keys
 /resources/authentication/
