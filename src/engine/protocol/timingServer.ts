@@ -53,6 +53,7 @@ function readNtp(buf: Buffer, offset: number): bigint {
 }
 
 export class TimingSync {
+  constructor(peerHost = '') { this._peerHost = peerHost }
   private _sock: dgram.Socket | null = null
   private _timer: NodeJS.Timeout | null = null
   private _peerHost = ''
@@ -69,6 +70,8 @@ export class TimingSync {
   /** T1 of the request still in flight, so stale or duplicate responses are dropped. */
   private _pendingT1: bigint | null = null
   private _synced = false
+  private _lastActivityNs = 0n
+  get lastActivityNs(): bigint { return this._lastActivityNs }
 
   /** Bind a dual-stack UDP port for timing and return it. */
   listen(): Promise<number> {
@@ -120,8 +123,13 @@ export class TimingSync {
 
   private _onMessage(msg: Buffer, rinfo: dgram.RemoteInfo): void {
     if (msg.length < 32) return
+    // Ignore other hosts/ports when using the negotiated phone timing endpoint.
+    const normal = (host: string) => host.split('%')[0].toLowerCase().replace(/^::ffff:/, '')
+    if (!this._peerHost || normal(rinfo.address) !== normal(this._peerHost) ||
+        (msg[1] === PT_RESPONSE && this._peerPort > 0 && rinfo.port !== this._peerPort)) return
 
     if (msg[1] === PT_REQUEST) {
+      this._lastActivityNs = process.hrtime.bigint()
       // The phone syncs to us: echo its transmit (ntpTransmit, offset 24) as our
       // originate (offset 8), then stamp receive (T2) and transmit (T3).
       const resp = Buffer.alloc(32)
@@ -146,6 +154,8 @@ export class TimingSync {
       // Drop responses that do not answer the request still in flight.
       if (this._pendingT1 === null || t1 !== this._pendingT1) return
       this._pendingT1 = null
+      // A matching reply proves reachability even if clock filtering rejects its RTT.
+      this._lastActivityNs = process.hrtime.bigint()
       const offset = (0.5 * (Number(t2 - t1) + Number(t3 - t4))) / TWO32
       const rtt = (Number(t4 - t1) - Number(t3 - t2)) / TWO32
       if (rtt < 0) return

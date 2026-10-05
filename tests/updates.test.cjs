@@ -61,7 +61,7 @@ test('uses only WinPlay releases, compares numeric versions and excludes nonstab
   assert.equal(updates.state().release.version, '1.10.0', 'state snapshots cannot mutate the module');
 });
 
-test('merges concurrent checks, persists daily throttle and allows manual retry', async t => {
+test('merges concurrent checks, persists automatic throttle and allows manual retry', async t => {
   let finish, calls = 0;
   const dir = directory(t);
   const updates = new Updates({version: '1.1.0', dataDir: dir, fetchImpl: () => { calls++; return new Promise(resolve => { finish = resolve; }); }});
@@ -83,6 +83,27 @@ test('merges concurrent checks, persists daily throttle and allows manual retry'
   await restored.check({automatic: true});
   assert.equal(calls, 2);
   assert.equal(new Updates({version: '1.1.0', dataDir: dir}).state().automatic, false);
+});
+
+test('startup bypasses recent checks, background interval is two hours, and disabling still wins',async t=>{
+ const {AUTO_CHECK_INTERVAL_MS}=require('../src/updates.cjs');assert.equal(AUTO_CHECK_INTERVAL_MS,7200000);
+ let calls=0;const dir=directory(t),fetchImpl=async()=>{calls++;return response([])};
+ const updates=new Updates({version:'1.2.2',dataDir:dir,fetchImpl});await updates.check({automatic:true});
+ const restored=new Updates({version:'1.2.2',dataDir:dir,fetchImpl});await restored.check({automatic:true,force:true});assert.equal(calls,2);
+ await restored.check({automatic:true});assert.equal(calls,2);
+ restored.lastCheck=Date.now()-AUTO_CHECK_INTERVAL_MS;await restored.check({automatic:true});assert.equal(calls,3);
+ await restored.setAutomatic(false);await restored.check({automatic:true,force:true});assert.equal(calls,3);
+});
+
+test('startup creates a continuing background timer without foreground prompts',async()=>{
+ const vm=require('node:vm'),source=fs.readFileSync(require.resolve('../src/main.cjs'),'utf8');
+ const checks=[],prompts=[],timeouts=[],intervals=[];
+ const context={closing:false,AUTO_CHECK_INTERVAL_MS:7200000,updates:{check:async options=>{checks.push(options);return {automatic:true,status:'发现新版本'}}},promptUpdate:async()=>prompts.push(true),setTimeout:(fn,ms)=>{timeouts.push({fn,ms});return {}},setInterval:(fn,ms)=>{intervals.push({fn,ms});return {}}};
+ vm.createContext(context);vm.runInContext(source.slice(source.indexOf('let updateStartupTimer'),source.indexOf('function log(')),context);
+ context.startUpdateChecks();assert.equal(timeouts[0].ms,5000);timeouts[0].fn();await Promise.resolve();
+ assert.equal(checks.length,1);assert.equal(prompts.length,1);assert.equal(intervals[0].ms,7200000);
+ intervals[0].fn();await Promise.resolve();assert.equal(checks.length,2);assert.equal(prompts.length,1);assert.equal(checks[1].force,true);
+ context.closing=true;intervals[0].fn();assert.equal(checks.length,2);
 });
 
 test('notifies once per version and retains safe links after failed requests', async t => {

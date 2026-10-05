@@ -2,6 +2,17 @@
   'use strict';
   // Translate only application-owned phrases. Device names, media titles and raw logs stay untouched.
   const entries=[
+    ['iPhone网络连接已断开','iPhone網路連線已中斷','The iPhone network connection was lost'],
+    ['未收到iPhone的网络心跳，请检查Wi-Fi连接。','未收到iPhone的網路心跳，請檢查Wi-Fi連線。','No network heartbeat was received from the iPhone. Check the Wi-Fi connection.'],
+    ['旧接收进程尚未退出，请稍后重新启动接收','舊接收程序尚未退出，請稍後重新啟動接收','The previous receiver has not exited. Try starting the receiver again shortly.'],
+    ['接收进程退出失败','接收程序退出失敗','The receiver could not exit'],
+    ['帧率回退失败，请重新启动接收','影格率回退失敗，請重新啟動接收','Frame-rate fallback failed. Start the receiver again.'],
+    ['已读取新网络，未能读取密码；请手动填写。','已讀取新網路，未能讀取密碼；請手動填寫。','Read a different network but could not read its password. Enter its password manually.'],
+    ['无线连接被动断开时自动重连','無線連線被動中斷時自動重新連線','Automatically reconnect after a wireless disconnection'],
+    ['仅在已有CarPlay连接被动断开后回连上次的iPhone。主动停止接收或断开连接时不重连。','僅在已有CarPlay連線被動中斷後重新連接上次的iPhone。主動停止接收或中斷連線時不重新連線。','Reconnects to the last iPhone only after an established CarPlay connection is lost. Manually stopping or disconnecting does not trigger reconnection.'],
+    ['等待自动重连','等待自動重新連線','Waiting to reconnect'],
+    ['无线连接已断开，等待自动重连','無線連線已中斷，等待自動重新連線','Wireless connection lost; waiting to reconnect'],
+    ['电脑正在使用以太网。请在iPhone上打开“设置→Wi-Fi”，手动加入“{ssid}”，输入该Wi-Fi的密码。若已连接，请保持连接并等待CarPlay画面，无需反复点击启动接收。','電腦正在使用乙太網路。請在iPhone上開啟「設定→Wi-Fi」，手動加入「{ssid}」，輸入該Wi-Fi的密碼。若已連接，請保持連線並等待CarPlay畫面，無需反覆點擊啟動接收。','The computer is using Ethernet. On your iPhone, open Settings → Wi-Fi, join “{ssid}”, and enter its Wi-Fi password. If already connected, stay connected and wait for CarPlay. You do not need to repeatedly start the receiver.'],
     ['热点信道必须为0—196，0表示自动','熱點頻道必須為0—196，0表示自動','Hotspot channel must be between 0 and 196. Channel 0 means automatic'],
     ['Windows未提供移动热点的实际信道，已使用0自动发现','Windows未提供行動熱點的實際頻道，已使用0自動探索','Windows does not expose the mobile hotspot channel. Channel 0 uses automatic discovery'],
     ['热点名称已读取，但无法读取热点密码，请手动填写','熱點名稱已讀取，但無法讀取熱點密碼，請手動填寫','The hotspot name was read, but its password could not be read. Enter the password manually'],

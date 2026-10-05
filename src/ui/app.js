@@ -68,7 +68,7 @@ function metadata(s,artChanged){
   if('mediaSession' in navigator){if(!navigator.mediaSession.metadata)navigator.mediaSession.metadata=new MediaMetadata();const meta=navigator.mediaSession.metadata;meta.title=s.title;meta.artist=s.artist;meta.album=s.album;if(artChanged)meta.artwork=artUrl?[{src:artUrl,type:s.artwork?.[0]===137?'image/png':'image/jpeg'}]:[];navigator.mediaSession.playbackState=s.playing?'playing':'paused';for(const [name,index] of [['play',1],['pause',2],['previoustrack',5],['nexttrack',4]])navigator.mediaSession.setActionHandler(name,()=>winplay.input({command:'media',index}));try{navigator.mediaSession.setActionHandler('seekto',s.canSeek&&s.durationMs?event=>winplay.input({command:'seek',ms:Math.round(event.seekTime*1000)}):null)}catch{}}
 }
 function position(ms){$('seek').value=Math.min(playing.durationMs||1,ms||0);$('progress').textContent=format(ms)+' / '+format(playing.durationMs);if(navigator.mediaSession&&playing.durationMs>0){try{navigator.mediaSession.setPositionState({duration:playing.durationMs/1000,position:Math.min(playing.durationMs/1000,Math.max(0,(ms||0)/1000)),playbackRate:1})}catch{}}}
-function renderLogs(){if(logs.length)literal('logs',logs.slice(-100).join('\n'));else text('logs','暂无日志');$('open-log').disabled=!logs.length}
+function renderLogs(){if(logs.length>1000)logs.splice(0,logs.length-1000);if(logs.length)literal('logs',logs.slice(-100).join('\n'));else text('logs','暂无日志');$('open-log').disabled=!logs.length}
 function diagnosticLine(item){return new Date(item.time||Date.now()).toLocaleTimeString()+'  '+item.status+(item.detail?'\n'+item.detail:'')}
 function renderUpdates(){
   const value=updateState||{};$('automatic-updates').checked=value.automatic!==false;$('check-updates').disabled=!!value.checking;text('check-updates',value.checking?'正在检查更新…':'检查更新');
@@ -84,12 +84,16 @@ winplay.on(message=>{
   if(message.type==='updates'){updateState=message.updates||{};renderUpdates()}
   if(message.type==='close-behavior'){if(config)config.closeBehavior=message.value;$('closeBehavior').value=message.value}
   if(message.type==='appearance')theme(message.dark);
+  if(message.type==='reconnect-wait'){state(true);text('side-status','等待自动重连')}
+  if(message.type==='starting')$('lan-guide').hidden=true;
+  if(message.type==='lan-guide'){text('lan-guide','电脑正在使用以太网。请在iPhone上打开“设置→Wi-Fi”，手动加入“{ssid}”，输入该Wi-Fi的密码。若已连接，请保持连接并等待CarPlay画面，无需反复点击启动接收。',{ssid:message.ssid});$('lan-guide').hidden=false}
   if(message.type==='starting'||message.type==='started'){lastReceiverStatus='';state(true);if(config)window.winplayAudio?.prepare(config).catch(()=>{})}
   if(message.type==='requested-fps'){$('fps-fallback').hidden=message.attempt>=message.requested;text('fps-fallback','当前已从{requested}fps回退至{attempt}fps',{requested:message.requested,attempt:message.attempt})}
   if(message.type==='status'||message.type==='diagnostic'){if(message.type==='status'){lastReceiverStatus=message.status+' '+(message.detail||'');text('status',message.status);text('status-detail',message.detail||'')}logs.push(diagnosticLine(message));renderLogs()}
-  if(message.type==='connected')text('side-status','已收到视频');
+  if(message.type==='connected'){$('lan-guide').hidden=true;lastReceiverStatus='正在接收CarPlay视频';text('status',lastReceiverStatus);text('status-detail','');text('side-status','已收到视频')}
   if(message.type==='stopped'){
-    const failure=/失败|拒绝|未建立|超时|无法|没有检测|请选择|异常/.test(lastReceiverStatus);state(false);metadata({title:'',artist:'',album:'',playing:false,canSeek:false,durationMs:0,positionMs:0},true);
+    $('lan-guide').hidden=true;
+    const failure=/失败|拒绝|未建立|超时|无法|没有检测|请选择|异常|已断开/.test(lastReceiverStatus);state(false);metadata({title:'',artist:'',album:'',playing:false,canSeek:false,durationMs:0,positionMs:0},true);
     if(navigator.mediaSession){navigator.mediaSession.metadata=null;navigator.mediaSession.playbackState='none';for(const action of ['play','pause','previoustrack','nexttrack','seekto']){try{navigator.mediaSession.setActionHandler(action,null)}catch{}}}
     if(!failure){text('status','接收已停止');text('status-detail','可以重新启动接收。')}mediaFormat=undefined;text('actual-media-format','等待iPhone协商');
   }
@@ -109,6 +113,7 @@ winplay.on(message=>{
   $('width').onchange=$('height').onchange=()=>saveDisplay({width:Number($('width').value),height:Number($('height').value)});$('fullScreen').onchange=()=>saveDisplay({fullScreen:$('fullScreen').checked});$('displayId').onchange=()=>{const item=displayItems.find(d=>d.id===Number($('displayId').value));if(item)saveDisplay({displayId:item.id})};
   $('start').onclick=async()=>{const active=running;$('start').disabled=true;try{const saved=await Promise.all([...pendingSaves]);if(displayError){showPage('display');result('display-error',displayError);return}if(saved.some(value=>!value.ok))return;await window.winplayAudio.prepare(config);await call(active?'restart':'start')}finally{$('start').disabled=false}};$('stop').onclick=()=>call('stop');$('show-video').onclick=()=>call('show-video');
   $('audioEnabled').checked=config.audioEnabled!==false;$('audioEnabled').onchange=()=>save('audioEnabled',$('audioEnabled').checked);$('open-auth').onclick=()=>call('open-auth');$('open-log').onclick=()=>call('open-log');
+  $('autoReconnect').checked=config.autoReconnect===true;$('autoReconnect').onchange=()=>save('autoReconnect',$('autoReconnect').checked);
   $('refresh-status').onclick=async()=>{const value=await call('state');if(value.ok){text('auth-status',value.auth?'文件已就绪，等待iPhone验证':'缺少文件');logs.length=0;for(const item of value.diagnostics||[])logs.push(diagnosticLine(item));renderLogs();updateState=value.updates||updateState;renderUpdates()}};
   $('hotspot-settings').onclick=()=>call(config.wirelessMode==='lan'?'settings-location':'settings-hotspot');$('bluetooth-settings').onclick=()=>call('settings-bluetooth');$('refresh-bt').onclick=bluetooth;$('refresh-network').onclick=networks;$('refresh-displays').onclick=displays;$('refresh-audio').onclick=()=>audioDevices(true);
   $('import-auth').onclick=async()=>{const value=await winplay.call('import-auth');if(value.ok){text('auth-status','认证文件已更新');result('auth-result','认证材料已用Windows DPAPI保护保存')}else result('auth-result',value.error)};
@@ -131,10 +136,10 @@ winplay.on(message=>{
       if(lan)values.lanAccessPointMac=value.bssid||'';
       if(value.interfaceName)values[keys.networkInterface]=value.interfaceName;
       if(Number.isInteger(value.channel)&&value.channel>=(lan?1:0)&&value.channel<=196)values[keys.channel]=value.channel;
-      const passwordRead=typeof value.password==='string'&&value.password.length>0;if(passwordRead)values[keys.password]=value.password;
+      const passwordRead=value.passwordRead!==false&&typeof value.password==='string'&&value.password.length>0,networkChanged=value.ssid!==config[keys.ssid];if(passwordRead)values[keys.password]=value.password;else if(networkChanged)values[keys.password]='';
       const saved=await call('save',values);if(!saved.ok){if(current())result('network-result',saved.error||'网络设置保存失败，请重试。');return saved}
       Object.assign(config,values);if(!current())return {ok:true,ignored:true};
-      wirelessFields();await networks();if(current())result('network-result',passwordRead?'已读取当前网络和密码。':'已读取当前网络，未能读取密码；已保留原密码。',value.warning||'');
+      wirelessFields();await networks();if(current())result('network-result',passwordRead?'已读取当前网络和密码。':networkChanged?'已读取新网络，未能读取密码；请手动填写。':'已读取当前网络，未能读取密码；已保留原密码。',value.warning||'');
       return saved;
     })().catch(error=>{if(current())result('network-result',error.message||'未能读取当前网络，请检查网络设置后重试。');return {ok:false}});pendingSaves.add(operation);
     try{return await operation}finally{pendingSaves.delete(operation);networkReadBusy=false;text('read-network','读取当前网络和密码');button.disabled=false}

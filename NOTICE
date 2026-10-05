@@ -1,11 +1,11 @@
-WinPlay 1.1.0 — Roylyl
+WinPlay 1.2.2 — Roylyl
 GPL-3.0-or-later; see LICENSE.
 
 CarPlay control, pairing, encryption, plist and HID implementation adapted from
 Roylyl/MacPlay, based on f-io/LIVI (Lasse Heitgres and contributors).
 Wireless iAP2 identification and handoff adapted from Roylyl/AndroidPlay,
 based on shihabal3amri/DiPlay. Original source comments are retained.
-See vendor/MacPlay-NOTICE and docs/SOURCE-AUDIT.md.
+See vendor/MacPlay-NOTICE and vendor/SOURCE-AUDIT.md.
 
 No Apple endorsement or MFi certification is claimed. This locally built installation package embeds the authentication pair supplied
 by the user. Credentials require separate redistribution authorization. MacPlay NOTICE

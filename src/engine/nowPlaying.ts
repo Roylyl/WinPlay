@@ -8,7 +8,7 @@ export class NowPlaying {
   const id=media.get(0),app=play.get(16);const nextId=id&&id.length===8?id.readBigUInt64BE().toString():this.state.trackId;const nextApp=app?iapText(app):this.state.appId
   const trackChanged=!!this.state.trackId&&nextId!==this.state.trackId||!!this.state.appId&&nextApp!==this.state.appId
   if(trackChanged){this.state={...this.state,title:'',artist:'',album:'',durationMs:0,positionMs:0,canSeek:false,artwork:undefined,generation:this.state.generation+1};this.artworkId=undefined;this.seekUntil=0;this.lastArtworkPublish=-Infinity;if(this.timer){clearTimeout(this.timer);this.timer=undefined}changed=true}
-  this.state.positionMs=this.position();this.stamp=performance.now();this.state.trackId=nextId;this.state.appId=nextApp
+  this.state.positionMs=trackChanged?0:this.position();this.stamp=performance.now();this.state.trackId=nextId;this.state.appId=nextApp
   if(media.has(1))this.state.title=iapText(media.get(1));if(media.has(6))this.state.album=iapText(media.get(6));if(media.has(12))this.state.artist=iapText(media.get(12))
   const duration=media.get(4);if(duration?.length===4)this.state.durationMs=duration.readUInt32BE()
   const position=play.get(1);if(position?.length===4){const value=position.readUInt32BE();if(performance.now()>this.seekUntil||Math.abs(value-this.state.positionMs)<2000){this.state.positionMs=value;this.seekUntil=0}}

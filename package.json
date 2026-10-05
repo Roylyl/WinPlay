@@ -1,12 +1,13 @@
 {
   "name": "winplay",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "private": true,
   "description": "Windows CarPlay接收端",
   "author": "Roylyl",
   "license": "GPL-3.0-or-later",
   "main": "src/main.cjs",
   "scripts": {
+    "prebuild": "node node_modules/electron/install.js",
     "build:engine": "node scripts/prune-engine.cjs && tsc -p tsconfig.json",
     "build:native": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1",
     "build": "npm run build:engine && npm run build:native && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-assets.ps1",
@@ -17,10 +18,10 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "typescript": "^5.9.3",
-    "electron": "^40.0.0",
+    "electron": "42.11.10",
     "electron-builder": "^26.0.12",
-    "marked": "^17.0.0"
+    "marked": "^17.0.0",
+    "typescript": "^5.9.3"
   },
   "dependencies": {
     "@noble/curves": "1.9.7",
@@ -58,6 +59,8 @@
       "docs/**",
       "README.md",
       "src/close-behavior.cjs",
+      "src/passive-reconnect.cjs",
+      "src/receiver-process.cjs",
       "src/display-settings.cjs",
       "!docs/validation/**",
       "src/system-media.cjs",

@@ -2,7 +2,9 @@ const {app,BrowserWindow,ipcMain,screen,nativeTheme,dialog,shell,safeStorage,ses
 const {fork,execFile}=require('node:child_process');const fs=require('node:fs');const path=require('node:path');const os=require('node:os');
 const {SystemMedia}=require('./system-media.cjs');
 const I18n=require('./ui/i18n.js');
-const {Updates}=require('./updates.cjs');
+const {Updates,AUTO_CHECK_INTERVAL_MS}=require('./updates.cjs');
+const {PassiveReconnect}=require('./passive-reconnect.cjs');
+const {retireReceiver}=require('./receiver-process.cjs');
 const {redactText,redactDiagnostics}=require('./diagnostic-redactor.cjs');
 const {readCurrentNetwork}=require('./wlan-reader.cjs');
 app.commandLine.appendSwitch('disable-features','HardwareMediaKeyHandling,MediaSessionService');
@@ -19,31 +21,66 @@ const engineRoot=app.isPackaged?path.join(resources,'app.asar.unpacked'):root;
 const validationDir=process.env.WINPLAY_TEST_OUTPUT||path.join(root,'docs/validation');
 const native=app.isPackaged?path.join(resources,'native','WinPlay.Platform.exe'):path.join(root,'build/native/WinPlay.Platform.exe');
 const runtime=path.join(resources,'node/node.exe'),dataDir=path.join(app.getPath('userData'),'data');
-const defaults={language:'system',resolutionMode:'preset',fullScreen:false,closeBehavior:'ask',wirelessMode:'hotspot',lanSsid:'',lanPassword:'',lanChannel:36,lanNetworkInterface:'',lanAccessPointMac:'',width:1280,height:720,fps:60,theme:'system',displayId:0,audioEnabled:true,mediaVolume:1,callVolume:1,inputDevice:'',outputDevice:'',ssid:'',password:'',channel:0,targetBluetooth:'',lastBluetooth:'',networkInterface:''};
+const defaults={language:'system',resolutionMode:'preset',fullScreen:false,closeBehavior:'ask',autoReconnect:false,wirelessMode:'hotspot',lanSsid:'',lanPassword:'',lanChannel:36,lanNetworkInterface:'',lanAccessPointMac:'',width:1280,height:720,fps:60,theme:'system',displayId:0,audioEnabled:true,mediaVolume:1,callVolume:1,inputDevice:'',outputDevice:'',ssid:'',password:'',channel:0,targetBluetooth:'',lastBluetooth:'',networkInterface:''};
 let systemMedia,tray,updates,startController,nativeMonitorRead,nativeMonitors=[],updatePromptOpen=false,videoHidden=false;
 let videoClosePromptOpen=false,closePromptOpen=false,connectionEpoch=0,reconnecting=false;
 let settings={...defaults},main,video,engine,lastConfig,pendingFrames=[],videoReady=false,videoSized=false,videoDecoded=false,pendingVideoSettings,videoPixelSize,videoDisplayId,videoSizingTimer,running=false,closing=false;let diagnostics=[],stats={requested:60,attempt:60,receivedFps:0,decodedFps:0};
 function t(text){return I18n.translate(text,settings.language,app.getLocale())}
 function dialogText(options){const o={...options};for(const key of ['title','message','detail','checkboxLabel'])if(typeof o[key]==='string')o[key]=t(o[key]);if(o.buttons)o.buttons=o.buttons.map(t);return o}
 async function promptUpdate(){if(selfTest||closing||!main||main.isDestroyed()||updatePromptOpen||!updates?.shouldNotify())return;updatePromptOpen=true;updates.markNotified();try{const r=updates.state().release,download=r.installer||r.page,choice=await dialog.showMessageBox(main,dialogText({type:'info',title:'发现新版本',message:t('发现新版：'+r.version),buttons:[r.installer?'下载更新':'查看发行说明','稍后'],defaultId:1,cancelId:1,noLink:true}));if(choice.response===0&&!closing)await shell.openExternal(download)}finally{updatePromptOpen=false}}
-function save(){fs.mkdirSync(dataDir,{recursive:true});const file=path.join(dataDir,'settings.dpapi');fs.writeFileSync(file+'.new',safeStorage.encryptString(JSON.stringify(settings)));fs.renameSync(file+'.new',file)}
-function load(){try{diagnostics=redactDiagnostics(JSON.parse(fs.readFileSync(path.join(dataDir,'diagnostics.json'),'utf8'))).slice(-150)}catch{}try{const saved=JSON.parse(safeStorage.decryptString(fs.readFileSync(path.join(dataDir,'settings.dpapi'))));settings={...defaults};for(const key of Object.keys(defaults))if(typeof saved[key]===typeof defaults[key])settings[key]=saved[key];save()}catch{}}
+function save(value=settings){fs.mkdirSync(dataDir,{recursive:true});const file=path.join(dataDir,'settings.dpapi');fs.writeFileSync(file+'.new',safeStorage.encryptString(JSON.stringify(value)));fs.renameSync(file+'.new',file)}
+function load(){try{diagnostics=redactDiagnostics(JSON.parse(fs.readFileSync(path.join(dataDir,'diagnostics.json'),'utf8'))).slice(-1000)}catch{}try{const saved=JSON.parse(safeStorage.decryptString(fs.readFileSync(path.join(dataDir,'settings.dpapi'))));settings={...defaults};for(const key of Object.keys(defaults))if(typeof saved[key]===typeof defaults[key])settings[key]=saved[key];save()}catch{}}
 function send(type,payload={}){if(type==='now-playing')systemMedia?.update(payload.state,payload.artChanged);else if(type==='position')systemMedia?.position(payload.positionMs);else if(type==='stopped')systemMedia?.clear();if(main&&!main.isDestroyed())main.webContents.send('event',{type,...payload})}
-function log(status,detail=''){diagnostics.push({time:new Date().toISOString(),status:redactText(status)||'应用状态',detail:redactText(detail)||''});diagnostics=diagnostics.slice(-150);try{fs.mkdirSync(dataDir,{recursive:true});fs.writeFileSync(path.join(dataDir,'diagnostics.json'),JSON.stringify(diagnostics))}catch{}send(status.startsWith('网络发现：')||['控制请求','流协商','控制命令','事件通道已连接','建立iAP网络链路','iAP网络数据通道已连接','视频接收端口已就绪','视频TCP通道已连接','音频运行统计','视频运行统计','网络接收端已就绪','网络控制连接已到达'].includes(status)?'diagnostic':'status',{status,detail})}
+let diagnosticWriteTimer,diagnosticAttempt='',diagnosticStarted=0;
+function flushDiagnostics(){clearTimeout(diagnosticWriteTimer);diagnosticWriteTimer=undefined;try{fs.mkdirSync(dataDir,{recursive:true});fs.writeFileSync(path.join(dataDir,'diagnostics.json'),JSON.stringify(diagnostics))}catch{}}
+let updateStartupTimer,updateIntervalTimer;
+function checkAutomaticUpdate(notify=false){if(closing)return;updates.check({automatic:true,force:true}).then(value=>{if(notify&&value.automatic&&value.status==='发现新版本')promptUpdate().catch(()=>{})}).catch(()=>{})}
+function startUpdateChecks(){updateStartupTimer=setTimeout(()=>{if(closing)return;checkAutomaticUpdate(true);updateIntervalTimer=setInterval(()=>checkAutomaticUpdate(false),AUTO_CHECK_INTERVAL_MS);updateIntervalTimer.unref?.()},5000);updateStartupTimer.unref?.()}
+function log(status,detail='',diagnosticOnly=false){const entry={time:new Date().toISOString(),attempt:diagnosticAttempt||undefined,elapsedMs:diagnosticStarted?Date.now()-diagnosticStarted:undefined,status:redactText(status)||'应用状态',detail:redactText(detail)||''};diagnostics.push(entry);diagnostics=diagnostics.slice(-1000);if(!diagnosticWriteTimer)diagnosticWriteTimer=setTimeout(flushDiagnostics,250);send(diagnosticOnly||status.startsWith('连接诊断：')||status.startsWith('网络发现：')||['控制请求','流协商','控制命令','事件通道已连接','建立iAP网络链路','iAP网络数据通道已连接','视频接收端口已就绪','视频TCP通道已连接','音频运行统计','视频运行统计','网络接收端已就绪','网络控制连接已到达'].includes(status)?'diagnostic':'status',{status:entry.status,detail:entry.detail})}
 function restoreMain(){if(!main||main.isDestroyed())return;main.setSkipTaskbar(false);main.restore();main.show();main.focus()}
 function hideMain(){if(!main||main.isDestroyed())return;main.setSkipTaskbar(true);main.hide()}
 function hideVideo(){if(!video||video.isDestroyed())return;videoHidden=true;video.setSkipTaskbar(true);video.hide()}
 function minimizeVideo(){if(!video||video.isDestroyed())return;videoHidden=true;video.setSkipTaskbar(false);video.minimize()}
 function restoreVideo(){if(!video||video.isDestroyed()||!videoSized||!videoDecoded)return;videoHidden=false;video.setSkipTaskbar(false);video.restore();video.show();video.focus()}
-function updateTray(){tray?.setContextMenu(Menu.buildFromTemplate([{label:t('显示WinPlay'),click:restoreMain},{label:t('显示CarPlay'),enabled:!!video&&!video.isDestroyed(),click:restoreVideo},{type:'separator'},{label:t(running?'停止接收':'启动接收'),click:()=>{if(running){stop();log('接收已停止')}else if(!authExists())log('缺少认证文件','请先在关于页导入认证文件');else start().catch(e=>log('启动接收失败',e.message))}},{type:'separator'},{label:t('退出WinPlay'),click:()=>app.quit()}]))}
+function updateTray(){tray?.setContextMenu(Menu.buildFromTemplate([{label:t('显示WinPlay'),click:restoreMain},{label:t('显示CarPlay'),enabled:!!video&&!video.isDestroyed(),click:restoreVideo},{type:'separator'},{label:t(running||passiveReconnect.active?'停止接收':'启动接收'),click:()=>{if(running||passiveReconnect.active){stop();log('接收已停止')}else if(!authExists())log('缺少认证文件','请先在关于页导入认证文件');else start().catch(e=>log('启动接收失败',e.message))}},{type:'separator'},{label:t('退出WinPlay'),click:()=>app.quit()}]))}
 function createTray(){tray=new Tray(path.join(resources,'icons','winplay.ico'));tray.setToolTip('WinPlay');tray.on('click',restoreMain);tray.on('double-click',restoreMain);updateTray()}
 function createMain(){main=new BrowserWindow({width:900,height:650,minWidth:900,minHeight:560,show:!selfTest,backgroundColor:nativeTheme.shouldUseDarkColors?'#171717':'#ffffff',title:'WinPlay',autoHideMenuBar:true,icon:path.join(resources,'icons','winplay-256.png'),webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,backgroundThrottling:false}});main.loadFile(path.join(uiRoot,'index.html'));main.on('close',async event=>{if(closing)return;event.preventDefault();if(closePromptOpen)return;closePromptOpen=true;try{const choice=await chooseCloseBehavior(settings.closeBehavior,()=>dialog.showMessageBox(main,dialogText({type:'question',title:'关闭WinPlay',message:'关闭主窗口时要执行什么操作？',detail:'最小化到托盘会保持CarPlay连接；退出会停止接收。',buttons:['退出WinPlay','最小化到托盘','取消'],defaultId:1,cancelId:2,checkboxLabel:'不再提示',checkboxChecked:false,noLink:true})));if(choice.remember){settings.closeBehavior=choice.remember;save();send('close-behavior',{value:choice.remember})}if(choice.action==='minimize')hideMain();else if(choice.action==='exit')app.quit()}finally{closePromptOpen=false}});main.webContents.setWindowOpenHandler(()=>({action:'deny'}));main.webContents.on('will-navigate',e=>e.preventDefault())}
 function selectedDisplay(config=settings){return screen.getAllDisplays().find(d=>d.id===config.displayId)||screen.getPrimaryDisplay()}
 function refreshNativeMonitors(){if(nativeMonitorRead)return nativeMonitorRead;nativeMonitorRead=new Promise((resolve,reject)=>execFile(native,['monitors'],{windowsHide:true,timeout:5000},(error,out,err)=>{if(error){nativeMonitors=[];reject(Error(err||'Windows显示器枚举失败'));return}try{const result=JSON.parse(out);if(!Array.isArray(result.items)||!result.items.length||result.items.some(item=>!['x','y','width','height'].every(key=>Number.isInteger(item[key]))||item.width<=0||item.height<=0))throw Error('无法读取显示器物理像素');nativeMonitors=result.items;resolve()}catch(e){nativeMonitors=[];reject(e)}})).finally(()=>{nativeMonitorRead=undefined});return nativeMonitorRead}
 function displayPixels(display){if(!nativeMonitors.length)throw Error('无法读取显示器物理像素');return physicalDisplay(display,rect=>screen.dipToScreenRect(null,rect),nativeMonitors)}
-function setVideoPixels(){if(!video||video.isDestroyed()||!videoPixelSize)return;const current=video;current.setResizable(true);const handle=current.getNativeWindowHandle().readBigUInt64LE().toString();execFile(native,['window-pixels',handle,String(videoPixelSize.width),String(videoPixelSize.height)],{windowsHide:true,timeout:5000},(error,out)=>{if(video!==current||current.isDestroyed())return;if(error){log('画面窗口尺寸设置失败',error.message);stop();return}try{const actual=JSON.parse(out);if(actual.clientWidth!==videoPixelSize.width||actual.clientHeight!==videoPixelSize.height)throw Error('物理像素尺寸不一致');current.setResizable(false);current.webContents.send('event',{type:'video-viewport',width:videoPixelSize.width,height:videoPixelSize.height});videoSized=true;if(!selfTest&&videoDecoded&&!videoHidden){current.show();current.focus()}}catch(e){log('画面窗口尺寸设置失败',e.message);stop()}})}
+function setVideoPixels(){
+ if(!video||video.isDestroyed()||!videoPixelSize)return;
+ const current=video,requested={...videoPixelSize};videoSized=false;
+ current.setResizable(true);
+
+ const handle=current.getNativeWindowHandle().readBigUInt64LE().toString();
+ const fail=error=>{if(video!==current||current.isDestroyed())return;log('画面窗口尺寸设置失败',error.message);stop()};
+ execFile(native,['window-pixels',handle,String(requested.width),String(requested.height)],{windowsHide:true,timeout:5000},error=>{
+  if(video!==current||current.isDestroyed())return;
+  if(error){fail(error);return}
+
+  current.setResizable(false);
+  // Win32 sizing updates the HWND, but Electron must also update its own frame
+  // layout. Reapplying the bounds here avoids the first-show white non-client
+  // margins that otherwise disappear only after the user moves the window.
+  current.setBounds(current.getBounds());
+  // Finalize the non-client frame after Electron restores the fixed style.
+  // Keep this asynchronous: Win32 sends messages back to Electron's UI thread.
+  execFile(native,['window-frame',handle],{windowsHide:true,timeout:5000},(error,out)=>{
+   if(video!==current||current.isDestroyed())return;
+   if(error){fail(error);return}
+   try{
+    const actual=JSON.parse(out);current.videoBorderResult=actual.borderResult;
+    if(actual.clientWidth!==requested.width||actual.clientHeight!==requested.height)throw Error('物理像素尺寸不一致');
+    current.webContents.send('event',{type:'video-viewport',width:requested.width,height:requested.height});
+    videoSized=true;
+    if(!selfTest&&videoDecoded&&!videoHidden){current.show();current.focus()}
+   }catch(error){fail(error)}
+  });
+ });
+}
 function createVideo(config=pendingVideoSettings||settings){if(video&&!video.isDestroyed())return;const target=selectedDisplay(config),size=videoSize(config,displayPixels(target)),bounds=dipVideoBounds(target,size);videoPixelSize=size;videoDisplayId=target.id;videoReady=false;videoSized=false;videoDecoded=false;videoHidden=false;
- video=new BrowserWindow({...bounds,resizable:false,maximizable:false,fullscreenable:false,frame:!size.fullScreen,thickFrame:false,roundedCorners:false,title:'WinPlay · CarPlay',icon:path.join(resources,'icons','winplay-256.png'),show:false,backgroundColor:'#000000',autoHideMenuBar:true,webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,backgroundThrottling:false}});
+ video=new BrowserWindow({...bounds,resizable:false,maximizable:false,fullscreenable:false,frame:!size.fullScreen,thickFrame:true,roundedCorners:false,title:'WinPlay · CarPlay',icon:path.join(resources,'icons','winplay-256.png'),show:false,backgroundColor:'#000000',autoHideMenuBar:true,webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,backgroundThrottling:false}});
  updateTray();video.on('minimize',()=>{videoHidden=true});video.on('restore',()=>{videoHidden=false});video.setMenu(null);video.webContents.setVisualZoomLevelLimits(1,1);video.webContents.on('before-input-event',(event,input)=>{if(input.type==='keyDown'&&input.key==='Escape'){event.preventDefault();minimizeVideo()}if((input.control||input.meta)&&['+','-','=','0'].includes(input.key))event.preventDefault()});video.on('will-resize',event=>event.preventDefault());setVideoPixels();
  video.on('close',async event=>{if(closing||!(running||reconnecting))return;event.preventDefault();if(videoClosePromptOpen)return;videoClosePromptOpen=true;const current=video,epoch=connectionEpoch;try{const choice=await dialog.showMessageBox(current,dialogText({type:'question',title:'断开CarPlay',message:'您确定要断开与iPhone的连接吗？',detail:'断开后将关闭CarPlay画面，并停止接收。',buttons:['断开连接','取消'],defaultId:1,cancelId:1,noLink:true}));if(choice.response===0&&video===current&&!current.isDestroyed()&&connectionEpoch===epoch)stop()}catch(e){if(video===current&&!current.isDestroyed())log('断开确认无法显示',e.message)}finally{videoClosePromptOpen=false}});
  video.loadFile(path.join(uiRoot,'video.html'));video.on('closed',()=>{video=undefined;videoReady=false;videoSized=false;videoDecoded=false;updateTray();if((running||reconnecting)&&!closing)stop()});video.webContents.setWindowOpenHandler(()=>({action:'deny'}));video.webContents.on('will-navigate',e=>e.preventDefault());
@@ -52,28 +89,35 @@ function createVideo(config=pendingVideoSettings||settings){if(video&&!video.isD
 function closeVideo(){videoReady=false;videoDecoded=false;pendingFrames=[];lastConfig=undefined;if(video&&!video.isDestroyed()){const win=video;video=undefined;win.destroy()}updateTray()}
 function worker(){return fork(path.join(engineRoot,'build/engine/run.js'),[],{execPath:runtime,execArgv:[],windowsHide:true,stdio:['ignore','ignore','ignore','ipc'],serialization:'advanced',env:{...process.env,WINPLAY_DATA:dataDir,WINPLAY_NATIVE:native,WINPLAY_RESOURCES:resources}})}
 function command(message){if(engine?.connected)engine.send(message)}
+let sessionEstablished=false,reconnectConfig,retiringReceiver;
+function retire(proc){const retirement={proc,promise:retireReceiver(proc).then(()=>true,error=>{log('接收进程退出失败',error.message);return false})};retiringReceiver=retirement;return retirement.promise}
+const passiveReconnect=new PassiveReconnect({attempt:async()=>{if(!settings.autoReconnect||closing||!reconnectConfig){passiveReconnect.cancel();return}log('连接诊断：自动重连开始');await start({...reconnectConfig,mediaVolume:settings.mediaVolume,callVolume:settings.callVolume,audioEnabled:settings.audioEnabled},true)},onWait:(seconds,attempt)=>{send('reconnect-wait',{seconds,attempt});log('无线连接已断开，等待自动重连','第'+attempt+'次尝试，将在'+seconds+'秒后检查网络和蓝牙。');updateTray()}});
+function passiveDisconnect(){const retry=settings.autoReconnect&&!closing&&reconnectConfig&&(sessionEstablished||passiveReconnect.active);sessionEstablished=false;if(engine){const previous=engine;engine=undefined;retire(previous)}stopped();if(retry)passiveReconnect.retry()}
 function stopped(){running=false;pendingVideoSettings=undefined;updateTray();closeVideo();stats={...stats,receivedFps:0,decodedFps:0,decodedWidth:0,decodedHeight:0};send('stopped');send('metrics',stats)}
-function stop(){connectionEpoch++;startController?.abort();startController=undefined;reconnecting=false;if(engine){const previous=engine;engine=undefined;if(previous.connected)previous.send({command:'stop'});setTimeout(()=>previous.kill(),1500).unref()}stopped()}
+function stop(){passiveReconnect.cancel();sessionEstablished=false;reconnectConfig=undefined;connectionEpoch++;startController?.abort();startController=undefined;reconnecting=false;if(engine){const previous=engine;engine=undefined;retire(previous)}stopped()}
 function handleEngineMessage(msg){
  if(msg.type==='status')log(msg.status,msg.detail)
+ else if(msg.type==='diagnostic')log(msg.status,msg.detail,true)
+ else if(msg.type==='audio-config'){const o=msg.opts||{};log('连接诊断：音频格式已协商',JSON.stringify({stream:msg.id,codec:o.codec,clockRate:o.clockRate,channels:o.channels,media:!!o.media}),true);send(msg.type,msg)}
  else if(msg.type==='video-config'){if(lastConfig?.generation!==msg.generation)pendingFrames=[];lastConfig=msg;if(videoReady)video.webContents.send('event',msg)}
  else if(msg.type==='video-frame'){if(!running){command({command:'video-ack',frameId:msg.frameId,generation:msg.generation});return}try{createVideo()}catch(e){log('画面窗口尺寸设置失败',e.message);stop();return}if(msg.reset)pendingFrames=[];if(videoReady)video.webContents.send('event',msg);else if(pendingFrames.length<16)pendingFrames.push(msg);else{pendingFrames=[];command({command:'video-recover',reason:'ipc-overflow'})}}
  else if(msg.type==='video-diagnostic'){const values={};for(const key of ['receivedFrames','receivedBytes','sentFrames','droppedFrames','backpressurePauses','recoveries','maxInFlight','maxInFlightBytes','inFlight','inFlightBytes','decoderQueueSize'])if(Number.isFinite(msg[key]))values[key]=msg[key];for(const key of ['waitingKeyframe','paused'])if(typeof msg[key]==='boolean')values[key]=msg[key];log('视频运行统计',JSON.stringify(values))}
- else if(msg.type==='connected'){settings.lastBluetooth=engine?.selectedPhone||settings.targetBluetooth||settings.lastBluetooth;save();send(msg.type,msg)}
+ else if(msg.type==='connected'){sessionEstablished=true;reconnectConfig=engine?.connectionConfig;passiveReconnect.cancel();settings.lastBluetooth=engine?.selectedPhone||settings.targetBluetooth||settings.lastBluetooth;try{save()}catch(error){log('连接诊断：偏好保存失败',error.message,true)}send(msg.type,msg)}
  else if(msg.type==='metrics'){stats={...stats,...msg};send('metrics',stats)}
- else if(msg.type==='stopped'){stopped()}
+ else if(msg.type==='stopped'){passiveDisconnect()}
  else if(msg.type==='show-settings')restoreMain()
  else send(msg.type,msg)
 }
-async function start(config={...settings}){
- if(running)return;
+async function start(config={...settings},automatic=false){
+ if(running)return;if(!automatic){passiveReconnect.cancel();sessionEstablished=false;reconnectConfig=undefined}
  const target=selectedDisplay(config),size=videoSize(config,displayPixels(target));
  let resolved={...resolveConnectionSettings(config),width:size.width,height:size.height};
  if(!resolved.targetBluetooth)resolved.targetBluetooth=settings.lastBluetooth;
  validateSettings(resolved,{network:resolved.wirelessMode!=='hotspot'});
- const ticket=++connectionEpoch;running=true;send('starting');updateTray();
+ const ticket=++connectionEpoch;diagnosticStarted=Date.now();diagnosticAttempt=diagnosticStarted.toString(36)+'-'+ticket;running=true;send('starting');updateTray();log('连接诊断：启动请求',JSON.stringify({version:app.getVersion(),windows:os.release(),arch:process.arch,mode:resolved.wirelessMode,width:size.width,height:size.height,requestedFps:resolved.fps,automaticPhone:!config.targetBluetooth,defaultOutput:!config.outputDevice,defaultInput:!config.inputDevice}),true);
  try{
   pendingVideoSettings={...config};const controller=new AbortController();startController=controller;
+  if(retiringReceiver){const previous=retiringReceiver;if(!await previous.promise&&previous.proc.exitCode==null&&previous.proc.signalCode==null)throw Error('旧接收进程尚未退出，请稍后重新启动接收');if(retiringReceiver===previous)retiringReceiver=undefined;if(connectionEpoch!==ticket||!running)return}
   let lastNetworkWait='';
   const networkDetail=result=>result.diagnostic?(typeof result.diagnostic==='string'?result.diagnostic:JSON.stringify(result.diagnostic)):result.code||'NETWORK_NOT_READY';
   const network=await require('./network-selection.cjs').waitForNetwork(resolved.wirelessMode,resolved.networkInterface,{signal:controller.signal,onWait:result=>{
@@ -85,6 +129,8 @@ async function start(config={...settings}){
   if(resolved.wirelessMode==='hotspot'&&network.diagnostic&&networkDetail(network)!==lastNetworkWait)log('网络发现：热点接口检查',networkDetail(network));
   if(!network.ok)throw Error(network.error);
   resolved.networkInterface=network.name;
+  if(resolved.wirelessMode==='lan'&&network.item?.wireless===false)send('lan-guide',{ssid:resolved.ssid});
+  log('连接诊断：接口检查完成',JSON.stringify({mode:resolved.wirelessMode,ready:!!network.item?.ready,wireless:!!network.item?.wireless,physicalLan:!!network.item?.lan,activeHotspot:!!network.item?.activeHotspot,ipv4Available:!!network.item?.ipv4,ipv6Available:!!network.item?.ipv6}),true);
   if(resolved.wirelessMode==='hotspot'){
    const current=await readCurrentNetwork('hotspot',{snapshot:network,includePassword:true});
    if(connectionEpoch!==ticket||!running)return;
@@ -99,15 +145,16 @@ async function start(config={...settings}){
   }else if(resolved.wirelessMode==='lan'&&network.item?.wireless){
    const current=await readCurrentNetwork('lan',{interfaceName:network.name,includePassword:true});
    if(connectionEpoch!==ticket||!running)return;
+   if(connectionEpoch!==ticket||!running)return;
    if(current.ok&&current.interfaceName?.toLowerCase()===network.name.toLowerCase()&&current.ssid!==resolved.ssid)throw Error('当前Wi-Fi与配置不一致，请读取当前网络并重新确认共享密码');
    resolved=refreshLanParameters(resolved,current);
    if(current.ok&&current.ssid===resolved.ssid&&current.interfaceName?.toLowerCase()===network.name.toLowerCase()&&current.passwordRead&&typeof current.password==='string')resolved.password=current.password;
    log('网络发现：局域网参数检查',current.ok?'已读取所选Wi-Fi接口':'未能读取当前Wi-Fi，使用手动配置');
   }
-  startController=undefined;const proc=worker();engine=proc;proc.selectedPhone=resolved.targetBluetooth;
+  startController=undefined;const proc=worker();engine=proc;proc.selectedPhone=resolved.targetBluetooth;proc.connectionConfig={...config,targetBluetooth:resolved.targetBluetooth};
   proc.on('message',msg=>{if(engine===proc)handleEngineMessage(msg)});
-  proc.on('exit',code=>{if(engine!==proc)return;engine=undefined;if(running)log('接收已结束',code&&code!==0?'接收进程退出，请查看关于页日志':'');stopped()});
-  proc.on('error',()=>{if(engine!==proc)return;log('接收进程无法启动');stop()});
+  proc.on('exit',code=>{if(engine!==proc)return;engine=undefined;if(running)log('接收已结束',code&&code!==0?'接收进程退出，请查看关于页日志':'');passiveDisconnect()});
+  proc.on('error',()=>{if(engine!==proc)return;log('接收进程无法启动');passiveDisconnect()});
   proc.send({command:'start',settings:resolved});
  }catch(e){if(connectionEpoch!==ticket)return;startController=undefined;log('启动接收失败',e.message);stopped();throw e}
 }
@@ -115,10 +162,10 @@ function validateSettings(s,{network=true}={}){if(![30,60,90,120].includes(s.fps
 function checkSender(event){const windows=[main,video].filter(Boolean);if(!windows.some(w=>!w.isDestroyed()&&w.webContents.id===event.sender.id))throw new Error('IPC来源无效')}
 function authExists(){return ['identity.pk8.dpapi','certificate.p7b.dpapi'].every(n=>fs.existsSync(path.join(dataDir,'authentication',n)))||['identity.pk8','certificate.p7b'].every(n=>fs.existsSync(path.join(resources,'authentication',n)))}
 ipcMain.handle('call',async(event,op,arg)=>{checkSender(event);try{switch(op){
- case 'state':return {ok:true,settings,version:app.getVersion(),locale:app.getLocale(),architecture:process.arch,updates:updates?.state(),running,dark:nativeTheme.shouldUseDarkColors,auth:authExists(),stats,diagnostics};
- case 'save':{if(Object.hasOwn(arg,'closeBehavior'))validateCloseBehavior(arg.closeBehavior);const allowed=Object.keys(defaults);const next={...settings};for(const key of allowed)if(Object.hasOwn(arg,key)&&typeof arg[key]===typeof defaults[key])next[key]=arg[key];if(!['system','zh-Hans','zh-Hant','en'].includes(next.language))throw Error('语言无效');if(!['system','light','dark'].includes(next.theme))throw new Error('主题无效');next.mediaVolume=Math.max(0,Math.min(1,next.mediaVolume));next.callVolume=Math.max(0,Math.min(1,next.callVolume));if(!['hotspot','lan'].includes(next.wirelessMode))throw new Error('无线模式无效');videoSize(next,displayPixels(screen.getAllDisplays().find(d=>d.id===next.displayId)||screen.getPrimaryDisplay()));const languageChanged=next.language!==settings.language;settings=next;save();if(languageChanged){updateTray();send('language',{language:settings.language,locale:app.getLocale()})}nativeTheme.themeSource=settings.theme;send('appearance',{dark:nativeTheme.shouldUseDarkColors});command({command:'audio',mediaVolume:settings.mediaVolume,callVolume:settings.callVolume});send('audio-enabled',{enabled:settings.audioEnabled});if(!running)send('audio-devices',{inputDevice:settings.inputDevice,outputDevice:settings.outputDevice});return {ok:true};}
+ case 'state':return {ok:true,settings,version:app.getVersion(),locale:app.getLocale(),architecture:process.arch,updates:updates?.state(),running:running||passiveReconnect.active,dark:nativeTheme.shouldUseDarkColors,auth:authExists(),stats,diagnostics};
+ case 'save':{if(Object.hasOwn(arg,'closeBehavior'))validateCloseBehavior(arg.closeBehavior);const allowed=Object.keys(defaults);const next={...settings};for(const key of allowed)if(Object.hasOwn(arg,key)&&typeof arg[key]===typeof defaults[key])next[key]=arg[key];if(!['system','zh-Hans','zh-Hant','en'].includes(next.language))throw Error('语言无效');if(!['system','light','dark'].includes(next.theme))throw new Error('主题无效');next.mediaVolume=Math.max(0,Math.min(1,next.mediaVolume));next.callVolume=Math.max(0,Math.min(1,next.callVolume));if(!['hotspot','lan'].includes(next.wirelessMode))throw new Error('无线模式无效');if(['width','height','fullScreen','resolutionMode','displayId'].some(key=>Object.hasOwn(arg,key)))videoSize(next,displayPixels(screen.getAllDisplays().find(d=>d.id===next.displayId)||screen.getPrimaryDisplay()));const languageChanged=next.language!==settings.language;save(next);settings=next;if(!settings.autoReconnect&&passiveReconnect.active){passiveReconnect.cancel();if(!running)stopped()}if(languageChanged){updateTray();send('language',{language:settings.language,locale:app.getLocale()})}nativeTheme.themeSource=settings.theme;send('appearance',{dark:nativeTheme.shouldUseDarkColors});command({command:'audio',mediaVolume:settings.mediaVolume,callVolume:settings.callVolume});send('audio-enabled',{enabled:settings.audioEnabled});if(!running)send('audio-devices',{inputDevice:settings.inputDevice,outputDevice:settings.outputDevice});return {ok:true};}
  case 'start':if(!authExists())throw new Error('请先在关于页导入有使用权限的配套认证材料');await start();return {ok:true};
- case 'restart':{if(!authExists())throw Error('请先导入认证文件');const target=selectedDisplay(),size=videoSize(settings,displayPixels(target));validateSettings({...resolveConnectionSettings(settings),width:size.width,height:size.height,targetBluetooth:settings.targetBluetooth||settings.lastBluetooth},{network:settings.wirelessMode!=='hotspot'});const snapshot={...settings},previous=engine;stop();const ticket=connectionEpoch;reconnecting=true;if(previous)await new Promise(resolve=>{const timer=setTimeout(()=>{previous.kill();resolve()},2200);previous.once('exit',()=>{clearTimeout(timer);resolve()})});if(connectionEpoch!==ticket)return {ok:false,error:'重新连接已取消'};reconnecting=false;await start(snapshot);return {ok:true};}
+ case 'restart':{if(!authExists())throw Error('请先导入认证文件');const target=selectedDisplay(),size=videoSize(settings,displayPixels(target));validateSettings({...resolveConnectionSettings(settings),width:size.width,height:size.height,targetBluetooth:settings.targetBluetooth||settings.lastBluetooth},{network:settings.wirelessMode!=='hotspot'});const snapshot={...settings};stop();const ticket=connectionEpoch+1;await start(snapshot);if(connectionEpoch!==ticket)return {ok:false,error:'重新连接已取消'};return {ok:true};}
  case 'show-video':if(!video||video.isDestroyed())throw Error('画面窗口尚未创建');if(!videoSized||!videoDecoded)throw Error('正在准备画面窗口');restoreVideo();return {ok:true};
  case 'open-auth':{const dir=path.join(dataDir,'authentication');fs.mkdirSync(dir,{recursive:true});const error=await shell.openPath(dir);if(error)throw Error(error);return {ok:true};}
  case 'open-log':{const file=path.join(dataDir,'diagnostics.json');fs.writeFileSync(file,JSON.stringify(redactDiagnostics(diagnostics)));const error=await shell.openPath(file);if(error)throw Error(error);return {ok:true};}
@@ -140,22 +187,27 @@ ipcMain.handle('call',async(event,op,arg)=>{checkSender(event);try{switch(op){
  default:throw new Error('未知操作');}}catch(e){return {ok:false,error:e.message}}});
 const testInputs=[];
 ipcMain.on('input',(event,msg)=>{checkSender(event);if(selfTest&&msg.command==='touch')testInputs.push(msg);const allowed=['touch','media','seek','mic','video-ack','video-recover','request-keyframe'];if(allowed.includes(msg.command))command(msg);if(msg.command==='decoded'){stats.decodedFps=msg.fps;stats.decodedWidth=msg.width;stats.decodedHeight=msg.height;send('metrics',stats)}if(msg.command==='video-visible'&&video&&!video.isDestroyed()){videoDecoded=true;if((!selfTest||windowSelfTest)&&videoSized&&!videoHidden){video.show();video.focus()}}if(msg.command==='video-minimize'&&video&&!video.isDestroyed())minimizeVideo();if(msg.command==='video-close'&&video&&!video.isDestroyed())video.close();if(msg.command==='video-recovery')log('视频解码恢复',String(msg.reason).slice(0,200));if(msg.command==='decode-error'){log('视频解码失败',msg.reason);stop()}if(msg.command==='audio-diagnostic')log('音频运行统计',String(msg.reason).slice(0,800));if(msg.command==='audio-error')log('音频处理需要检查',String(msg.reason).slice(0,200))});
-app.on('before-quit',()=>{closing=true;systemMedia?.close();tray?.destroy();tray=undefined;stop()});
-app.whenReady().then(async()=>{fs.mkdirSync(dataDir,{recursive:true});load();await refreshNativeMonitors().catch(error=>log('显示器物理尺寸查询失败',error.message));if(windowSelfTest){runWindowSelfTest().catch(error=>{fs.mkdirSync(validationDir,{recursive:true});fs.writeFileSync(path.join(validationDir,'window-failure.txt'),error.stack);closing=true;app.exit(1)});return}if(selfTest)settings.language='zh-Hans';updates=new Updates({version:app.getVersion(),dataDir,onChange:value=>send('updates',{updates:value})});nativeTheme.themeSource=settings.theme;session.defaultSession.setPermissionRequestHandler((wc,permission,cb)=>cb(wc.id===main?.webContents.id&&permission==='media'));session.defaultSession.setPermissionCheckHandler((wc,permission)=>wc?.id===main?.webContents.id&&permission==='media');nativeTheme.on('updated',()=>send('appearance',{dark:nativeTheme.shouldUseDarkColors}));screen.on('display-metrics-changed',()=>{clearTimeout(videoSizingTimer);videoSizingTimer=setTimeout(async()=>{try{await refreshNativeMonitors();if(!video||video.isDestroyed())return;const target=screen.getAllDisplays().find(d=>d.id===videoDisplayId);if(!target)throw Error('显示器已断开');videoSize({...videoPixelSize,fullScreen:false},displayPixels(target));video.setBounds(dipVideoBounds(target,videoPixelSize));setVideoPixels()}catch(e){log('显示器配置已变化',e.message);stop()}},200)});screen.on('display-removed',()=>{if(video&&!video.isDestroyed()&&!screen.getAllDisplays().some(d=>d.id===videoDisplayId)){log('显示器已断开，请重新选择显示位置');stop()}});createMain();createTray();if(!selfTest)main.webContents.once('did-finish-load',()=>setTimeout(()=>{if(!closing)updates.check({automatic:true}).then(value=>{if(value.automatic&&value.status==='发现新版本')promptUpdate().catch(()=>{})}).catch(()=>{})},5000).unref());systemMedia=new SystemMedia(path.join(app.isPackaged?path.join(resources,'native'):path.join(root,'build/native'),'WinPlay.Media.exe'),m=>{if(['media','seek'].includes(m.command))command(m)},reason=>log('系统媒体同步失败',reason));if(selfTest)main.webContents.once('did-finish-load',()=>runSelfTest().catch(e=>{fs.mkdirSync(validationDir,{recursive:true});fs.writeFileSync(path.join(validationDir,'electron-failure.txt'),e.stack);app.exit(1)}))});
+app.on('before-quit',()=>{closing=true;clearTimeout(updateStartupTimer);clearInterval(updateIntervalTimer);stop();systemMedia?.close();tray?.destroy();tray=undefined;flushDiagnostics()});
+app.whenReady().then(async()=>{fs.mkdirSync(dataDir,{recursive:true});load();await refreshNativeMonitors().catch(error=>log('显示器物理尺寸查询失败',error.message));if(windowSelfTest){runWindowSelfTest().catch(error=>{fs.mkdirSync(validationDir,{recursive:true});fs.writeFileSync(path.join(validationDir,'window-failure.txt'),error.stack);closing=true;app.exit(1)});return}if(selfTest)settings.language='zh-Hans';updates=new Updates({version:app.getVersion(),dataDir,onChange:value=>send('updates',{updates:value})});nativeTheme.themeSource=settings.theme;session.defaultSession.setPermissionRequestHandler((wc,permission,cb)=>cb(wc.id===main?.webContents.id&&permission==='media'));session.defaultSession.setPermissionCheckHandler((wc,permission)=>wc?.id===main?.webContents.id&&permission==='media');nativeTheme.on('updated',()=>send('appearance',{dark:nativeTheme.shouldUseDarkColors}));screen.on('display-metrics-changed',()=>{clearTimeout(videoSizingTimer);videoSizingTimer=setTimeout(async()=>{try{await refreshNativeMonitors();if(!video||video.isDestroyed())return;const target=screen.getAllDisplays().find(d=>d.id===videoDisplayId);if(!target)throw Error('显示器已断开');videoSize({...videoPixelSize,fullScreen:false},displayPixels(target));video.setBounds(dipVideoBounds(target,videoPixelSize));setVideoPixels()}catch(e){log('显示器配置已变化',e.message);stop()}},200)});screen.on('display-removed',()=>{if(video&&!video.isDestroyed()&&!screen.getAllDisplays().some(d=>d.id===videoDisplayId)){log('显示器已断开，请重新选择显示位置');stop()}});createMain();createTray();if(!selfTest)main.webContents.once('did-finish-load',startUpdateChecks);systemMedia=new SystemMedia(path.join(app.isPackaged?path.join(resources,'native'):path.join(root,'build/native'),'WinPlay.Media.exe'),m=>{if(['media','seek'].includes(m.command))command(m)},reason=>log('系统媒体同步失败',reason,true));if(selfTest)main.webContents.once('did-finish-load',()=>runSelfTest().catch(e=>{fs.mkdirSync(validationDir,{recursive:true});fs.writeFileSync(path.join(validationDir,'electron-failure.txt'),e.stack);app.exit(1)}))});
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function runWindowSelfTest(){
  const result={kind:'targeted Windows taskbar minimize check',electron:process.versions.electron,checks:[]};
+ const metrics=current=>new Promise((resolve,reject)=>execFile(native,['window-metrics',current.getNativeWindowHandle().readBigUInt64LE().toString()],{windowsHide:true,timeout:5000},(error,out)=>{if(error)return reject(error);try{resolve(JSON.parse(out))}catch(error){reject(error)}}));
  const check=(name,passed,detail='')=>{result.checks.push({name,passed,detail});fs.mkdirSync(validationDir,{recursive:true});fs.writeFileSync(path.join(validationDir,'window-smoke.json'),JSON.stringify(result,null,2));if(!passed)throw Error(name+': '+detail)};
  try{
-  for(const fullScreen of [true,false]){
+  for(const fullScreen of (process.argv.includes('--fixed-window-only')?[false]:[true,false])){
    const mode=fullScreen?'native fullscreen':'fixed window';running=true;
    createVideo({...settings,fullScreen,width:960,height:540});
    const current=video;for(let attempt=0;attempt<50&&(!videoReady||!videoSized);attempt++)await delay(100);
    check(mode+' becomes ready',video===current&&videoReady&&videoSized&&videoPixelSize.fullScreen===fullScreen);
    check(mode+' stays hidden before a decoded frame',!current.isVisible()&&!videoDecoded);
    restoreVideo();check(mode+' cannot restore before a decoded frame',!current.isVisible());
-   await current.webContents.executeJavaScript("winplay.input({command:'video-visible'})");await delay(100);
-   check(mode+' displays after the first decoded frame',current.isVisible()&&videoDecoded);
+   await current.webContents.executeJavaScript("winplay.input({command:'video-visible'})");for(let attempt=0;attempt<20&&!current.isVisible();attempt++)await delay(100);
+   check(mode+' displays after the first decoded frame',current.isVisible()&&videoDecoded,JSON.stringify({visible:current.isVisible(),videoDecoded,videoSized,videoHidden,minimized:current.isMinimized()}));
+   const initialFrame=await metrics(current);
+   check(mode+' initial physical client size is exact',initialFrame.clientWidth===videoPixelSize.width&&initialFrame.clientHeight===videoPixelSize.height,JSON.stringify(initialFrame));
+   check(mode+' initial DWM outline is suppressed where supported',current.videoBorderResult===0||Number(os.release().split('.')[2])<22000,String(current.videoBorderResult));
+   check(mode+' remains fixed size',!current.isResizable());
    const skipRequests=[],setSkipTaskbar=current.setSkipTaskbar.bind(current);
    current.setSkipTaskbar=value=>{skipRequests.push(value);setSkipTaskbar(value)};
    const hiddenBeforeMinimize=[],minimize=current.minimize.bind(current);current.minimize=()=>{hiddenBeforeMinimize.push(videoHidden);minimize()};
@@ -166,10 +218,12 @@ async function runWindowSelfTest(){
    check(mode+' later video visibility does not restore the window',current.isMinimized()&&videoHidden&&running);
    restoreVideo();await delay(100);
    check(mode+' restores from taskbar',!current.isMinimized()&&current.isVisible()&&!videoHidden&&running);
+   const restoredFrame=await metrics(current);
+   check(mode+' restored frame retains pixel size',restoredFrame.clientWidth===initialFrame.clientWidth&&restoredFrame.clientHeight===initialFrame.clientHeight,JSON.stringify(restoredFrame));
    await current.webContents.executeJavaScript("winplay.input({command:'video-minimize'})");await delay(150);
    check(mode+' renderer minimize IPC retains the window',current.isMinimized()&&!current.isDestroyed()&&videoHidden&&running&&!videoClosePromptOpen);
    check(mode+' keeps taskbar visibility and marks hidden before native minimize',skipRequests.length>=3&&skipRequests.every(value=>value===false)&&hiddenBeforeMinimize.length===2&&hiddenBeforeMinimize.every(value=>value===true));
-   running=false;closeVideo();await delay(50);
+   current.restore();await delay(300);running=false;closeVideo();await delay(50);
   }
   result.completed=true;fs.mkdirSync(validationDir,{recursive:true});fs.writeFileSync(path.join(validationDir,'window-smoke.json'),JSON.stringify(result,null,2));
   const failure=path.join(validationDir,'window-failure.txt');if(fs.existsSync(failure))fs.unlinkSync(failure);
@@ -208,4 +262,4 @@ async function runSelfTest(){main.showInactive();await delay(700);const dir=vali
  running=true;send('starting');createVideo();try{dialog.showMessageBox=async()=>({response:0});video.close();await delay(150);check('confirm close stops reception and closes video',!video&&!running&&await main.webContents.executeJavaScript(`document.getElementById('start').textContent==='启动接收'`))}finally{dialog.showMessageBox=originalDialog}
  fs.writeFileSync(path.join(dir,'electron-smoke.json'),JSON.stringify(result,null,2));if(fs.existsSync(path.join(dir,'electron-failure.txt')))fs.unlinkSync(path.join(dir,'electron-failure.txt'));stop();app.exit(0);
 }
-app.on('window-all-closed',()=>{if(!windowSelfTest)app.quit()});app.on('before-quit',stop);
+app.on('window-all-closed',()=>{if(!windowSelfTest)app.quit()});

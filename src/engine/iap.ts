@@ -18,7 +18,8 @@ export class IapLink extends EventEmitter {
  private pending:Pending[]=[];private queue:{session:number;data:Buffer}[]=[];private outOfOrder=new Map<number,{session:number;data:Buffer}>()
  private timer:NodeJS.Timeout;private writer:(b:Buffer)=>void;private lastNegotiate=0;private began=Date.now()
  private maxOutgoing=30;private maxLen=65535;private timeout=4000;private maxRetries=4
- constructor(private stream:Duplex,private options={initiate:false,zeroAck:false}){super();this.writer=b=>stream.write(b);stream.on('data',b=>this.feed(b));stream.on('error',()=>this.fail('iAP2传输错误'));stream.on('close',()=>{if(this.state!=='dead')this.emit('transport-closed')});this.writer(marker);this.timer=setInterval(()=>this.tick(),100);if(options.initiate){this.state='negotiate';this.sync()}}
+ constructor(private stream:Duplex,private options={initiate:false,zeroAck:false}){super();this.writer=b=>stream.write(b);stream.on('data',b=>this.feed(b));stream.on('error',()=>this.fail('iAP2传输错误'));stream.on('end',()=>this.transportClosed());stream.on('close',()=>this.transportClosed());this.writer(marker);this.timer=setInterval(()=>this.tick(),100);if(options.initiate){this.state='negotiate';this.sync()}}
+ private transportClosed(){if(this.state==='dead')return;this.close();this.emit('transport-closed')}
  setWriter(writer:(b:Buffer)=>void){this.writer=writer}
  private sync(){const payload=Buffer.from(this.options.zeroAck?[1,4,255,255,0,0,0,0,0,0,10,0,2,11,2,1,12,1,2]:[1,4,255,255,15,160,1,244,4,3,10,0,2,11,2,1,12,1,2]);this.writer(packet(128,this.seq,this.ack,0,payload));this.lastNegotiate=Date.now()}
  private fail(reason:string){if(this.state==='dead')return;this.close();this.emit('failed',reason)}
@@ -45,7 +46,7 @@ const text=(b?:Buffer)=>b?.toString('utf8').replace(/\0.*$/s,'')||''
 export function identification(cfg:Handoff){
  const sent=[0xaa01,0xaa03,0x5000,0x5002,0x5003,0x5200,0x5203,0xae00,0xae02,0x4157,0x4159,0x4154,0x4156,0x4301,0x5703]
  const received=[0xaa00,0xaa02,0xaa04,0xaa05,0xea00,0xea01,0x5001,0x5201,0x5202,0xae01,0x4158,0x4155,0x4300,0x4e0d,0x4e0e,0x5702]
- const p=[...['WinPlay','WinPlay','Roylyl',cfg.serial,'1.2.1','1.0'].map((s,i)=>param(i,str(s))),param(6,Buffer.concat(sent.map(u16))),param(7,Buffer.concat(received.map(u16))),param(8,Buffer.from([0])),param(9,u16(20)),param(10,Buffer.concat([param(0,Buffer.from([1])),param(1,str('io.github.roylyl.winplay')),param(2,Buffer.from([0]))])),param(12,str('en')),param(13,str('en'))]
+ const p=[...['WinPlay','WinPlay','Roylyl',cfg.serial,'1.2.2','1.0'].map((s,i)=>param(i,str(s))),param(6,Buffer.concat(sent.map(u16))),param(7,Buffer.concat(received.map(u16))),param(8,Buffer.from([0])),param(9,u16(20)),param(10,Buffer.concat([param(0,Buffer.from([1])),param(1,str('io.github.roylyl.winplay')),param(2,Buffer.from([0]))])),param(12,str('en')),param(13,str('en'))]
  p.push(param(17,Buffer.concat([param(0,u16(0)),param(1,str('blue')),param(2),param(3,Buffer.from(cfg.btMac.replaceAll(':',''),'hex')),param(4,str('blue')),param(5)])),param(24,Buffer.concat([param(0,u16(1)),param(1,str(cfg.ssid)),param(2),param(3,u16(1)),param(4),param(5)])))
  return csm(0x1d01,p)
 }

@@ -4,7 +4,7 @@ function receiver(readWlan,waitForNetwork=async()=>({ok:true,name:'Wi-Fi',item:{
  const source=fs.readFileSync(require.resolve('../src/main.cjs'),'utf8');
  const config={wirelessMode:'lan',lanSsid:'Public Test',lanPassword:'public-fixture',lanChannel:6,lanNetworkInterface:'Wi-Fi',lanAccessPointMac:'02:00:00:00:00:01',targetBluetooth:'02:00:00:00:00:02'};
  const messages=[],logs=[],events=[];
- const context={running:false,settings:config,connectionEpoch:0,AbortController,resolveConnectionSettings,refreshLanParameters,readCurrentNetwork:(mode,options)=>mode==='hotspot'?readHotspot(options):readWlan('read-network',undefined,options),
+ const context={running:false,settings:config,connectionEpoch:0,retiringReceiver:undefined,passiveReconnect:{cancel(){}},app:{getVersion:()=> '1.2.2'},os:{release:()=> 'test'},process:{arch:'x64'},AbortController,resolveConnectionSettings,refreshLanParameters,readCurrentNetwork:(mode,options)=>mode==='hotspot'?readHotspot(options):readWlan('read-network',undefined,options),
   selectedDisplay:()=>({}),displayPixels:()=>({}),videoSize:()=>({width:1280,height:720}),validateSettings:()=>{},
   send:type=>events.push(type),updateTray:()=>{},createVideo:()=>events.push('create-video'),log:(status,detail)=>logs.push({status,detail}),
   stopped:()=>{context.running=false;events.push('stopped')},
@@ -39,6 +39,22 @@ test('stopping while current Wi-Fi is being read cannot launch a late receiver',
  r.context.connectionEpoch++;r.context.running=false;
  finish({ok:true,interfaceName:'Wi-Fi',ssid:'Public Test',channel:44});await pending;
  assert.equal(r.messages.length,0);
+});
+test('a new receiver waits until the previous process has released its ports',async()=>{
+ let finish;
+ const r=receiver(async()=>({ok:false}));r.context.retiringReceiver={proc:{exitCode:null,signalCode:null},promise:new Promise(resolve=>finish=resolve)};
+ const pending=r.context.start();await new Promise(resolve=>setImmediate(resolve));assert.equal(r.messages.length,0);
+ finish(true);await pending;assert.equal(r.messages.length,1);assert.equal(r.context.retiringReceiver,undefined);
+});
+test('manual stop cancels a start waiting for an old process to exit',async()=>{
+ let finish;
+ const r=receiver(async()=>({ok:false}));r.context.retiringReceiver={proc:{exitCode:null,signalCode:null},promise:new Promise(resolve=>finish=resolve)};
+ const pending=r.context.start();await new Promise(resolve=>setImmediate(resolve));r.context.connectionEpoch++;r.context.running=false;
+ finish(true);await pending;assert.equal(r.messages.length,0);
+});
+test('a process that cannot exit prevents a conflicting receiver from binding the same ports',async()=>{
+ const r=receiver(async()=>({ok:false}));r.context.retiringReceiver={proc:{exitCode:null,signalCode:null},promise:Promise.resolve(false)};
+ await assert.rejects(r.context.start(),/旧接收进程尚未退出/);assert.equal(r.messages.length,0);assert.equal(r.context.running,false);
 });
 
 test('hotspot starts with live Windows credentials and auto channel, without reading an upstream saved Wi-Fi password',async()=>{

@@ -5,7 +5,7 @@
 <p align="center">把iPhone的CarPlay带到Windows，支持无线连接、独立画面窗口、音频播放与鼠标/触控板操作。</p>
 
 <p align="center">
-  <a href="package.json"><img src="https://img.shields.io/badge/source-1.2.1-2563eb?style=flat-square" alt="源码版本1.2.1"></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/source-1.2.2-2563eb?style=flat-square" alt="源码版本1.2.2"></a>
   <a href="https://github.com/Roylyl/WinPlay/releases/latest"><img src="https://img.shields.io/github/v/release/Roylyl/WinPlay?style=flat-square&amp;label=release&amp;color=2563eb" alt="GitHub最新正式发行版"></a>
   <a href="#使用条件"><img src="https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-555555?style=flat-square" alt="Windows10/11x64"></a>
   <a href="#无线连接"><img src="https://img.shields.io/badge/CarPlay-wireless-2563eb?style=flat-square" alt="无线CarPlay"></a>
@@ -15,7 +15,7 @@
 
 <p align="center">
   <a href="#界面与语言"><img src="https://img.shields.io/badge/languages-%E7%AE%80%E4%BD%93%20%2F%20%E7%B9%81%E9%AB%94%20%2F%20English-555555?style=flat-square" alt="简体中文、繁體中文和English"></a>
-  <a href="#从源码构建"><img src="https://img.shields.io/badge/core-Electron%2040-555555?style=flat-square" alt="Electron40桌面应用"></a>
+  <a href="#从源码构建"><img src="https://img.shields.io/badge/core-Electron%2042-555555?style=flat-square" alt="Electron42桌面应用"></a>
   <a href="https://github.com/Roylyl/WinPlay/releases"><img src="https://img.shields.io/github/downloads/Roylyl/WinPlay/total?style=flat-square&amp;label=downloads&amp;color=2563eb" alt="发行附件累计下载量"></a>
   <a href="https://github.com/Roylyl/WinPlay/stargazers"><img src="https://img.shields.io/github/stars/Roylyl/WinPlay?style=flat-square&amp;label=stars&amp;color=2563eb" alt="GitHubStar数"></a>
   <a href="https://github.com/Roylyl/WinPlay/forks"><img src="https://img.shields.io/github/forks/Roylyl/WinPlay?style=flat-square&amp;label=forks&amp;color=555555" alt="GitHubFork数"></a>
@@ -24,9 +24,9 @@
   <a href="https://github.com/Roylyl/WinPlay/commits"><img src="https://img.shields.io/github/last-commit/Roylyl/WinPlay?style=flat-square&amp;label=last%20commit&amp;color=555555" alt="最近提交时间"></a>
 </p>
 
-<p align="center"><a href="#快速入门">快速入门</a> · <a href="#主要功能">主要功能</a> · <a href="#显示与窗口">显示与窗口</a> · <a href="#音频与媒体控件">音频与媒体</a> · <a href="#其他平台">其他平台</a> · <a href="#从源码构建">源码构建</a> · <a href="docs/RELEASE-1.2.1.md">1.2.1发行说明</a></p>
+<p align="center"><a href="#快速入门">快速入门</a> · <a href="#主要功能">主要功能</a> · <a href="#显示与窗口">显示与窗口</a> · <a href="#音频与媒体控件">音频与媒体</a> · <a href="#其他平台">其他平台</a> · <a href="#从源码构建">源码构建</a> · <a href="docs/RELEASE-1.2.2.md">1.2.2版本说明</a></p>
 
-<p align="center"><a href="https://github.com/Roylyl/WinPlay/releases/latest">下载安装包</a> · <a href="docs/使用教程.md">详细使用方法</a> · <a href="https://github.com/Roylyl/WinPlay/issues">反馈问题</a></p>
+<p align="center"><a href="https://github.com/Roylyl/WinPlay/releases/latest">下载安装包</a> · <a href="#快速入门">使用方法</a> · <a href="https://github.com/Roylyl/WinPlay/issues">反馈问题</a></p>
 
 <p align="center">其他设备：<a href="https://github.com/Roylyl/MacPlay">MacPlay</a> · <a href="https://github.com/Roylyl/AndroidPlay">AndroidPlay</a></p>
 
@@ -47,7 +47,7 @@ WinPlay接续[MacPlay](https://github.com/Roylyl/MacPlay)，把独立CarPlay窗�
 
 ### 安装
 
-在[GitHubReleases](https://github.com/Roylyl/WinPlay/releases)下载`WinPlay-1.2.1-Setup-x64.exe`，按向导完成安装。单个EXE内置运行组件，可离线安装；开发者也可[从源码构建](#从源码构建)。
+在[GitHubReleases](https://github.com/Roylyl/WinPlay/releases)下载`WinPlay-1.2.2-Setup-x64.exe`，按向导完成安装。单个EXE内置运行组件，可离线安装；开发者也可[从源码构建](#从源码构建)。
 
 首次默认1280×720、60fps、系统默认输入/输出设备、100%音量与跟随系统语言。当前安装包未做发行代码签名，Windows可能显示安全提示。
 
@@ -141,7 +141,7 @@ WinPlay向Windows系统媒体控件同步iPhone上报的播放状态、标题、
 
 ## 更新与日志
 
-“关于→软件更新”提供自动检查、手动检查、发行说明与下载入口。自动检查默认开启，启动后在后台运行，每天最多自动检查一次；手动检查不受每日频率限制。
+“关于→软件更新”提供自动检查、手动检查、发行说明与下载入口。自动检查默认开启，每次启动软件后检查一次，运行期间每隔两小时在后台检查，包括最小化到任务栏或托盘时。后台定时检查不弹出对话框，结果显示在软件更新页面；手动检查可随时执行。关闭自动检查后，启动和定时检查均停止。
 
 更新只读取[Roylyl/WinPlay正式发行版](https://github.com/Roylyl/WinPlay/releases)，兼容`V1.2.1`、`v1.2.1`、`WinPlay-1.2.1`和纯数字标签。按数字版本大小判断新版，不按发布时间判断，草稿和预发行版不参与更新。
 
@@ -202,7 +202,7 @@ npm start
 npm run dist
 ~~~
 
-产物为`dist/WinPlay-1.2.1-Setup-x64.exe`，交付脚本同时复制到Windows桌面。本仓库的本机交付脚本会通过官方卸载程序清理已有WinPlay安装并保留用户数据，详见[交付约定](AGENTS.md)。
+产物为`dist/WinPlay-1.2.2-Setup-x64.exe`，交付脚本同时复制到Windows桌面。本仓库的本机交付脚本会通过官方卸载程序清理已有WinPlay安装并保留用户数据，详见[交付约定](AGENTS.md)。
 
 | 目录 | 内容 |
 | --- | --- |
@@ -213,16 +213,6 @@ npm run dist
 | `scripts` | 编译、运行时获取与安装包构建 |
 
 认证文件、个人配置、运行时缓存、依赖与构建产物由.gitignore排除。
-
-## 更新日志
-
-### 1.2.1
-
-修复统一V标签的版本识别、下载地址匹配和缓存恢复。详见[1.2.1发行说明](docs/RELEASE-1.2.1.md)。
-
-### 1.2.0
-
-加入多语言、关于与更新管理，统一分组设置、任务栏与托盘行为；完善无线网络读取、首帧显示、AAC音频调度、视频积压处理和诊断日志。详见[1.2.0发行说明](docs/RELEASE-1.2.0.md)。
 
 ## 来源与许可
 

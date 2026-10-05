@@ -43,10 +43,18 @@ test('hotspot channel zero is saved as automatic while LAN channel controls reta
  await r.read();assert.equal(r.config.channel,0);assert.equal(r.saves[0].values.channel,0);assert.equal(r.node('channel').value,0);assert.equal(r.node('channel').min,'0');assert.ok(r.node('network-help').textContent.includes('信道0表示自动'));assert.equal(r.config.lanChannel,6);
  r.config.wirelessMode='lan';r.context.wirelessFields();assert.equal(r.node('channel').min,'1');assert.equal(r.node('channel').value,6);assert.equal(r.node('read-network').disabled,false);
 });
-test('partial reading preserves the existing password and reports the specific missing-password reason',async()=>{
- const r=fixture();r.context.winplay.call=async()=>({ok:true,mode:'lan',ssid:'Public network fixture',interfaceName:'Wi-Fi 2',passwordRead:false,warning:'公开测试：没有已保存的共享密码'});
- await r.read();assert.equal(r.config.lanSsid,'Public network fixture');assert.equal(r.config.lanPassword,'public-lan-password');assert.equal(r.config.password,'public-hotspot-password');assert.ok(!Object.hasOwn(r.saves[0].values,'lanPassword'));
+test('partial reading of the same network preserves its existing password and reports why it could not be read',async()=>{
+ const r=fixture();r.context.winplay.call=async()=>({ok:true,mode:'lan',ssid:'Old public LAN',interfaceName:'Wi-Fi 2',passwordRead:false,warning:'公开测试：没有已保存的共享密码'});
+ await r.read();assert.equal(r.config.lanSsid,'Old public LAN');assert.equal(r.config.lanPassword,'public-lan-password');assert.equal(r.config.password,'public-hotspot-password');assert.ok(!Object.hasOwn(r.saves[0].values,'lanPassword'));
  assert.deepEqual(r.results.at(-1),['network-result','已读取当前网络，未能读取密码；已保留原密码。','公开测试：没有已保存的共享密码']);
+});
+test('a new network without a readable password cannot inherit credentials from the previous network',async()=>{
+ for(const mode of ['lan','hotspot']){
+  const r=fixture(mode),key=mode==='lan'?'lanPassword':'password';
+  r.context.winplay.call=async()=>({ok:true,mode,ssid:'New public network',interfaceName:'New adapter',passwordRead:false});
+  await r.read();assert.equal(r.config[key],'');assert.equal(r.saves[0].values[key],'');assert.equal(r.node('password').value,'');
+  assert.equal(r.results.at(-1)[1],'已读取新网络，未能读取密码；请手动填写。');
+ }
 });
 test('mode changes during reading discard stale results, including a round trip back to the same mode',async()=>{
  for(const nextMode of ['hotspot','lan']){

@@ -3,7 +3,7 @@ const path = require('node:path');
 
 const REPOSITORY = 'https://github.com/Roylyl/WinPlay';
 const API = 'https://api.github.com/repos/Roylyl/WinPlay/releases?per_page=100';
-const DAY_MS = 24 * 60 * 60 * 1000;
+const AUTO_CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_CACHE_BYTES = 16 * 1024;
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
@@ -138,9 +138,9 @@ class Updates {
   downloadUrl() { return this._state.release?.installer || this.releaseUrl(); }
 
   // Returning the existing Promise merges concurrent manual/background requests.
-  check({automatic = false} = {}) {
+  check({automatic = false, force = false} = {}) {
     if (this._flight) return this._flight;
-    if (automatic && (!this._state.automatic || Date.now() - this.lastCheck < DAY_MS)) return Promise.resolve(this.state());
+    if (automatic && (!this._state.automatic || !force && Date.now() - this.lastCheck < AUTO_CHECK_INTERVAL_MS)) return Promise.resolve(this.state());
     this.lastCheck = Date.now();
     this._save();
     this._state.checking = true;
@@ -201,4 +201,4 @@ class Updates {
   }
 }
 
-module.exports = {Updates};
+module.exports = {Updates, AUTO_CHECK_INTERVAL_MS};

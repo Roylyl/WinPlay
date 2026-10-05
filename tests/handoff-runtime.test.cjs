@@ -4,9 +4,9 @@ const {Duplex}=require('node:stream');
 const {HandoffRecovery}=require('../build/engine/handoffRecovery');
 const {receiverNetwork}=require('../build/engine/networkMode');
 
-async function receiver({interruptAt}={}){
+async function receiver({interruptAt,fps=60}={}){
  let now=0,receive,server;
- const timers=new Map(),messages=[],accessories=[];
+ const timers=new Map(),messages=[],accessories=[],stacks=[];
  const clock={setTimeout(callback,delay){const token={unref(){}};timers.set(token,{callback,due:now+delay});return token},clearTimeout:token=>timers.delete(token)};
  class Recovery extends HandoffRecovery{constructor(options){super(options,clock)}}
  class Accessory extends EventEmitter{
@@ -15,7 +15,9 @@ async function receiver({interruptAt}={}){
   async startCarPlay(){this.sent.push(this.cfg.host);this.emit('negotiation')}
   close(){}
  }
- class CpStack extends EventEmitter{setAudioActive(){}attachSocket(){}stop(){}}
+ class CpStack extends EventEmitter{constructor(){super();stacks.push(this)}setAudioActive(){}attachSocket(){}stop(){}}
+ const fallbackModule={exports:{}};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../build/engine/frameRateFallback'),'utf8'),{exports:fallbackModule.exports,setTimeout:clock.setTimeout,clearTimeout:clock.clearTimeout});
  const phone='02:00:00:00:00:02',mac='02:00:00:00:00:01';
  const addresses=[{family:'IPv4',address:'192.0.2.2',netmask:'255.255.255.0',mac,internal:false},{family:'IPv6',address:'fe80::1',scopeid:12,mac,internal:false}];
  const modules={
@@ -27,7 +29,7 @@ async function receiver({interruptAt}={}){
   './discovery':{Discovery:class{destroy(){}}},'./protocol/cpStack':{CpStack},
   './protocol/identity':{loadOrCreateIdentity:()=>({pubRaw:Buffer.alloc(32),pkHex:'public-fixture',pairingId:'public-fixture'}),accessoryDeviceId:()=>mac},
   './auth':{LocalSigner:class{}},'./storage':{dataDir:'public-fixture'},
-  './frameRateFallback':require('../build/engine/frameRateFallback'),
+  './frameRateFallback':fallbackModule.exports,
   './iap':{Accessory,IapLink:class extends EventEmitter{constructor(stream){super();this.stream=stream}}},
   './nowPlaying':{NowPlaying:class{position(){return 0}close(){}}},'./relay':{setIapRelayFactory:()=>{}},
   './media':{closeMedia:()=>{}},'./networkMode':{receiverNetwork,accessPointIdentifier:()=>mac},'./handoffRecovery':{HandoffRecovery:Recovery},'./videoFrameGate':require('../build/engine/videoFrameGate')
@@ -37,9 +39,9 @@ async function receiver({interruptAt}={}){
  const context={require:name=>{assert(name in modules,'unexpected runtime dependency '+name);return modules[name]},exports:{},Buffer,console:{},process:processMock,
   setTimeout:clock.setTimeout,clearTimeout:clock.clearTimeout,setInterval:()=>({unref(){}}),clearInterval:()=>{}};
  vm.runInNewContext(fs.readFileSync(require.resolve('../build/engine/run'),'utf8'),context);
- await receive({command:'start',settings:{networkInterface:'WLAN',wirelessMode:'lan',targetBluetooth:phone,ssid:'Public fixture',password:'public-fixture',channel:6,width:1280,height:720,fps:60}});
+ await receive({command:'start',settings:{networkInterface:'WLAN',wirelessMode:'lan',targetBluetooth:phone,ssid:'Public fixture',password:'public-fixture',channel:6,width:1280,height:720,fps}});
  const advance=milliseconds=>{const until=now+milliseconds;for(;;){const next=[...timers].filter(([,timer])=>timer.due<=until).sort((a,b)=>a[1].due-b[1].due)[0];if(!next)break;const [token,timer]=next;now=timer.due;timers.delete(token);timer.callback()}now=until};
- return {messages,accessory:accessories[0],advance,accept:()=>server.accept({destroy(){}}),stop:()=>receive({command:'stop'})};
+ return {messages,accessory:accessories[0],advance,accept:()=>{server.accept(Object.assign(new EventEmitter(),{destroy(){}}));return stacks.at(-1)},stop:()=>receive({command:'stop'})};
 }
 
 test('actual receiver retries only the handoff address and keeps the original 45-second network deadline',async()=>{
@@ -79,4 +81,13 @@ test('an authenticated Bluetooth channel closing does not make optional recovery
  assert.deepEqual(r.accessory.sent,['192.0.2.2']);assert(!r.messages.some(message=>message.type==='stopped'));
  r.advance(32999);assert(!r.messages.some(message=>message.type==='stopped'));r.advance(1);
  assert(r.messages.some(message=>message.status==='iPhone网络连接超时'));
+});
+
+test('frame-rate fallback after a control connection has bounded 90fps and 60fps attempts',async()=>{
+ const r=await receiver({fps:120});await r.accessory.startCarPlay();r.accept().emit('session-active');
+ r.advance(20000);assert.equal(r.messages.filter(m=>m.type==='requested-fps').at(-1).attempt,90);
+ r.advance(20000);assert.equal(r.messages.filter(m=>m.type==='requested-fps').at(-1).attempt,60);
+ r.advance(44999);assert(!r.messages.some(m=>m.type==='stopped'));
+ r.advance(1);assert(r.messages.some(m=>m.status==='CarPlay视频连接超时'));
+ assert(r.messages.some(m=>m.type==='stopped'));
 });
