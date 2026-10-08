@@ -2,6 +2,9 @@
   'use strict';
   // Translate only application-owned phrases. Device names, media titles and raw logs stay untouched.
   const entries=[
+    ['严格按屏幕物理像素显示','嚴格按螢幕實體像素顯示','Match physical screen pixels exactly'],
+    ['关闭时可拖动窗口边框等比例缩放；开启后固定为请求的物理像素尺寸。屏幕原生像素始终全屏显示。','關閉時可拖動視窗邊框等比例縮放；開啟後固定為請求的實體像素尺寸。螢幕原生像素一律全螢幕顯示。','When off, drag the window edges to resize proportionally. When on, the requested physical pixel size is fixed. Native resolution always fills the screen.'],
+    ['窗口物理像素尺寸不一致，请关闭严格物理像素显示后重新连接','視窗實體像素尺寸不一致，請關閉嚴格實體像素顯示後重新連線','The physical window size does not match. Turn off exact physical pixel sizing and reconnect.'],
     ['iPhone网络连接已断开','iPhone網路連線已中斷','The iPhone network connection was lost'],
     ['未收到iPhone的网络心跳，请检查Wi-Fi连接。','未收到iPhone的網路心跳，請檢查Wi-Fi連線。','No network heartbeat was received from the iPhone. Check the Wi-Fi connection.'],
     ['旧接收进程尚未退出，请稍后重新启动接收','舊接收程序尚未退出，請稍後重新啟動接收','The previous receiver has not exited. Try starting the receiver again shortly.'],

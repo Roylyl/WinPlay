@@ -44,6 +44,8 @@ export class Discovery {
  private timers = new Set<NodeJS.Timeout>()
  private interval:NodeJS.Timeout
  private closed = false
+ private lastAnnouncement = 0
+ private responseCount = 0
  private interfaces:typeof os.networkInterfaces
  private now:() => number
 
@@ -90,8 +92,21 @@ export class Discovery {
    }
   }
   if (!this.sockets.length) status('所选接口的Bonjour广播无法启动')
-  this.interval = setInterval(() => { this.query(CONTROL_SERVICE, 'PTR'); this.resolve() }, QUERY_INTERVAL)
+  this.interval = setInterval(() => { if(this.allowed())this.announce(); this.query(CONTROL_SERVICE, 'PTR'); this.resolve() }, QUERY_INTERVAL)
   this.interval.unref()
+ }
+
+ announce() {
+  if(this.closed || this.now()-this.lastAnnouncement<5000)return
+  this.lastAnnouncement=this.now()
+  for(const socket of this.sockets)this.respond(socket,this.records)
+  this.query(CONTROL_SERVICE,'PTR')
+  this.resolve()
+ }
+ summary() {
+  return {discoverySockets:this.sockets.length,discoveryResponses:this.responseCount,
+   controlServices:[...this.cache.values()].filter(item=>item.record.type==='SRV'&&item.record.name.endsWith('.'+CONTROL_SERVICE)).length,
+   probeEndpoints:this.attempted.size,probeAccepted:[...this.attempted.values()].filter(item=>item.state==='responded').length}
  }
 
  private errorCode(error:any) {
@@ -129,6 +144,7 @@ export class Discovery {
  }
  private receive(packet:any) {
   if (this.closed) return
+  this.responseCount++
   const records = [...(Array.isArray(packet.answers) ? packet.answers : []), ...(Array.isArray(packet.additionals) ? packet.additionals : [])]
   for (const raw of records) {
    if (!raw || typeof raw.name !== 'string' || raw.name.length > 255 || !raw.name || !['PTR', 'SRV', 'TXT', 'A', 'AAAA'].includes(raw.type) || !Number.isFinite(raw.ttl) || raw.ttl < 0) continue
@@ -189,7 +205,7 @@ export class Discovery {
    }
    // Probe one endpoint per service at a time, preferring Mac's link-local IPv6
    // route. Parallel connect requests can create competing CarPlay sessions.
-   if (endpoints.some(endpoint => ['pending', 'responded'].includes(this.attempted.get(endpoint.key)?.state || ''))) continue
+   if (endpoints.some(endpoint => {const attempt=this.attempted.get(endpoint.key);return attempt?.state==='pending'||attempt?.state==='responded'&&(attempt.retryAt>this.now()||attempt.attempt>=3)})) continue
    for (const {remote, source, ipv6, key, type} of endpoints) {
     const attempted = this.attempted.get(key)
     if (attempted && attempted.retryAt > this.now()) continue
@@ -212,7 +228,9 @@ export class Discovery {
   let first = '', accepted = false, errorCode = 'NO_RESPONSE'
   const finish = () => {
    if (this.closed) return
-   if (accepted) { this.attempted.set(key, {state:'responded', retryAt:0, attempt}); return }
+   // HTTP success acknowledges the request, not the reverse CarPlay connection.
+   // Retry only while the owner still allows discovery, with a bounded pause.
+   if (accepted) { this.attempted.set(key, {state:'responded', retryAt:this.now()+15000, attempt}); return }
    this.diagnostic('probe-error-' + family + '-' + errorCode, family + '控制探测失败/' + errorCode)
    this.attempted.set(key, {state:'failed', retryAt:this.now() + (attempt < 7 ? QUERY_INTERVAL : 30000), attempt})
    if (attempt < 7) {

@@ -17,3 +17,18 @@ test('native monitor matching uses the converted centre across mixed DPI and neg
  const unmatched=physicalDisplay(display,()=>({x:10000,y:0,width:1920,height:1080}),monitors);
  assert.equal(unmatched.x,10000);assert.equal(unmatched.width,1920);
 });
+
+const {presentationSize}=require('../src/display-settings.cjs');
+test('fit mode defaults to bounded logical size without changing negotiated pixels',()=>{
+ for(const scaleFactor of [1,1.25,1.5,1.75,2]){
+ const display={bounds:{x:0,y:0,width:2560/scaleFactor,height:1440/scaleFactor},workArea:{x:0,y:0,width:2560/scaleFactor,height:1400/scaleFactor},scaleFactor};
+ const cfg={width:1280,height:720};const p=presentationSize(cfg,display,{width:2560,height:1440});
+ assert.equal(p.strictPixels,false);assert.ok(p.width/scaleFactor<=960);assert.ok(p.height/scaleFactor+40<=display.workArea.height*.8+1);
+ assert.equal(cfg.width,1280);assert.ok(Math.abs(p.width/p.height-16/9)<.01);
+ const strict=presentationSize({...cfg,strictPixels:true},display,{width:2560,height:1440});assert.equal(strict.width,1280);assert.equal(strict.height,720);
+ }
+});
+test('native resolution remains exact fullscreen with fitting disabled',()=>{
+ const d={bounds:{x:0,y:0,width:1280,height:720},workArea:{x:0,y:0,width:1280,height:680},scaleFactor:2};
+ assert.deepEqual(presentationSize({fullScreen:true,strictPixels:false},d,{width:2560,height:1440}),{width:2560,height:1440,fullScreen:true,strictPixels:true});
+});

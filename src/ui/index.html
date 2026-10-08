@@ -17,7 +17,7 @@
     <button class="nav" data-page="audio"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 4V5L7 9zM16 8a6 6 0 0 1 0 8M19 5a10 10 0 0 1 0 14"/></svg><span data-i18n="音频">音频</span></button>
     <button class="nav" data-page="about"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v1"/></svg><span data-i18n="关于">关于</span></button>
   </nav>
-  <div class="side-footer"><span class="dot" id="side-dot"></span><span id="side-status" data-i18n="未连接">未连接</span><small><span data-i18n="版本">版本</span><span id="version">1.2.2</span></small></div>
+  <div class="side-footer"><span class="dot" id="side-dot"></span><span id="side-status" data-i18n="未连接">未连接</span><small><span data-i18n="版本">版本</span><span id="version">1.2.3</span></small></div>
 </aside>
 <main>
 <div class="settings-content">
@@ -63,8 +63,9 @@
   <div class="card resolution-card">
     <label class="setting-row"><span data-i18n="分辨率">分辨率</span><select id="resolutionPreset"><option value="native" data-i18n="屏幕原生像素">屏幕原生像素</option><option value="1280x720">1280×720</option><option value="1920x1080">1920×1080</option><option value="2560x1440">2560×1440</option><option value="custom" data-i18n="自定义">自定义</option></select></label>
     <div id="custom-size" hidden><label class="setting-row"><span data-i18n="宽度（像素）">宽度（像素）</span><input id="width" type="number" min="320" step="2"></label><label class="setting-row"><span data-i18n="高度（像素）">高度（像素）</span><input id="height" type="number" min="200" step="2"></label></div>
+    <label class="setting-row"><span data-i18n="严格按屏幕物理像素显示">严格按屏幕物理像素显示</span><input id="strictPixels" class="switch" type="checkbox"></label>
     <div class="setting-row"><span data-i18n="请求像素">请求像素</span><span id="request-pixels" class="value">1280×720</span></div><p id="display-error" class="caption result" role="status" hidden></p><input id="fullScreen" type="checkbox" hidden>
-    <p class="caption" data-i18n="按屏幕物理像素显示。原生像素全屏显示，其他分辨率使用可移动、不可调整大小的固定窗口。">按屏幕物理像素显示。原生像素全屏显示，其他分辨率使用可移动、不可调整大小的固定窗口。</p>
+    <p class="caption" data-i18n="关闭时可拖动窗口边框等比例缩放；开启后固定为请求的物理像素尺寸。屏幕原生像素始终全屏显示。">关闭时可拖动窗口边框等比例缩放；开启后固定为请求的物理像素尺寸。屏幕原生像素始终全屏显示。</p>
   </div>
   <h2 class="section-title" data-i18n="流畅度">流畅度</h2>
   <div class="card">
@@ -93,7 +94,7 @@
   <header><h1 data-i18n="关于">关于</h1></header>
   <h2 class="section-title" data-i18n="关于WinPlay">关于WinPlay</h2>
   <div class="card">
-    <div class="setting-row"><span data-i18n="版本">版本</span><span id="about-version" class="value">1.2.2</span></div>
+    <div class="setting-row"><span data-i18n="版本">版本</span><span id="about-version" class="value">1.2.3</span></div>
     <div class="setting-row"><span data-i18n="运行架构">运行架构</span><span id="architecture" class="value">x64</span></div>
     <div class="setting-row"><span data-i18n="开源许可">开源许可</span><span class="value">GPL-3.0-or-later</span></div>
     <div class="setting-row"><span data-i18n="项目主页">项目主页</span><button id="project-home" class="link-button">Roylyl/WinPlay ↗</button></div>

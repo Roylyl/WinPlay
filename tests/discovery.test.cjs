@@ -151,8 +151,9 @@ test('retains multiple PTR instances and immediately falls back after the first 
  h.retry();
  assert.equal(h.connections.length, 2, 'IPv6 retry cannot compete with in-flight IPv4');
  h.connections[1].emit('data', Buffer.from('HTTP/1.1 200 OK\r\n'));
+ h.authenticate(false); // Owner disables probing once reverse TCP arrives.
  h.advance(30001);
- assert.equal(h.connections.length, 2, 'successful fallback prevents duplicate connect requests');
+ assert.equal(h.connections.length, 2, 'established connection prevents duplicate connect requests');
 });
 
 test('single unreachable endpoint has seven bounded retries and later may start a fresh round', t => {
@@ -169,3 +170,19 @@ test('single unreachable endpoint has seven bounded retries and later may start 
  h.advance(30001);
  assert.equal(h.connections.length, 8, 'failed endpoints are not suppressed forever');
 });
+
+ test('accepted control request retries only while reverse connection is missing', t=>{
+ const h=harness(t,[ipv4]);h.receive([record(instance,'SRV',{target:host,port:7000}),record(host,'A','192.0.2.3')]);
+ h.connections[0].emit('data',Buffer.from('HTTP/1.1 200 OK\r\n'));
+ h.advance(14999);assert.equal(h.connections.length,1);
+ h.advance(1);assert.equal(h.connections.length,2);
+ h.connections[1].emit('data',Buffer.from('HTTP/1.1 200 OK\r\n'));h.advance(15000);
+ assert.equal(h.connections.length,3);h.connections[2].emit('data',Buffer.from('HTTP/1.1 200 OK\r\n'));h.advance(60000);assert.equal(h.connections.length,3);
+ });
+ test('handoff republishes discovery with a bounded rate and stops after destroy',t=>{
+ const h=harness(t,[ipv4]);const before=h.sockets[0].responses.length;
+ h.discovery.announce();assert.equal(h.sockets[0].responses.length,before+1);
+ h.discovery.announce();assert.equal(h.sockets[0].responses.length,before+1);
+ h.advance(5000);h.discovery.announce();assert.equal(h.sockets[0].responses.length,before+2);
+ h.discovery.destroy();const after=h.sockets[0].responses.length;h.advance(5000);h.discovery.announce();assert.equal(h.sockets[0].responses.length,after);
+ });

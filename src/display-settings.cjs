@@ -10,4 +10,13 @@ function physicalDisplay(display,convert,nativeMonitors=[]){
 }
 function videoSize(settings,physical){const width=settings.fullScreen?physical.width:settings.width,height=settings.fullScreen?physical.height:settings.height;if(!Number.isInteger(width)||!Number.isInteger(height)||width<320||height<200||width>physical.width||height>physical.height)throw new Error(`自定义像素不得超过所选屏幕的${physical.width}×${physical.height}`);if(width%2||height%2)throw new Error('请使用偶数像素尺寸');return {width,height,fullScreen:width===physical.width&&height===physical.height}}
 function dipVideoBounds(display,size){const scale=display.scaleFactor;const width=Math.round(size.width/scale),height=Math.round(size.height/scale);return {x:display.bounds.x+Math.round((display.bounds.width-width)/2),y:display.bounds.y+Math.round((display.bounds.height-height)/2),width,height}}
-module.exports={physicalDisplay,videoSize,dipVideoBounds};
+// Requested video pixels stay independent from the presentation size.
+function presentationSize(settings,display,physical){
+ const requested=videoSize(settings,physical);
+ if(requested.fullScreen||settings.strictPixels===true)return {...requested,strictPixels:true};
+ const work=display.workArea||display.bounds,ratio=requested.width/requested.height;
+ const width=Math.max(1,Math.floor(Math.min(960,540*ratio,work.width*.8,(work.height*.8-40)*ratio)));
+ const height=Math.max(1,Math.floor(width/ratio));
+ return {width:Math.round(width*display.scaleFactor),height:Math.round(height*display.scaleFactor),fullScreen:false,strictPixels:false};
+}
+module.exports={physicalDisplay,videoSize,dipVideoBounds,presentationSize};

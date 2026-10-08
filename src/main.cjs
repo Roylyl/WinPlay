@@ -10,7 +10,7 @@ const {readCurrentNetwork}=require('./wlan-reader.cjs');
 app.commandLine.appendSwitch('disable-features','HardwareMediaKeyHandling,MediaSessionService');
 const {resolveConnectionSettings,refreshLanParameters}=require('./connection-settings.cjs');
 const {chooseCloseBehavior,validateCloseBehavior}=require('./close-behavior.cjs');
-const {physicalDisplay,videoSize,dipVideoBounds}=require('./display-settings.cjs');
+const {physicalDisplay,videoSize,dipVideoBounds,presentationSize}=require('./display-settings.cjs');
 const windowSelfTest=process.argv.includes('--window-self-test'),selfTest=windowSelfTest||process.argv.includes('--self-test');
 if(!selfTest&&!app.requestSingleInstanceLock()){app.quit();process.exit(0)}
 app.on('second-instance',()=>restoreMain());
@@ -21,7 +21,7 @@ const engineRoot=app.isPackaged?path.join(resources,'app.asar.unpacked'):root;
 const validationDir=process.env.WINPLAY_TEST_OUTPUT||path.join(root,'docs/validation');
 const native=app.isPackaged?path.join(resources,'native','WinPlay.Platform.exe'):path.join(root,'build/native/WinPlay.Platform.exe');
 const runtime=path.join(resources,'node/node.exe'),dataDir=path.join(app.getPath('userData'),'data');
-const defaults={language:'system',resolutionMode:'preset',fullScreen:false,closeBehavior:'ask',autoReconnect:false,wirelessMode:'hotspot',lanSsid:'',lanPassword:'',lanChannel:36,lanNetworkInterface:'',lanAccessPointMac:'',width:1280,height:720,fps:60,theme:'system',displayId:0,audioEnabled:true,mediaVolume:1,callVolume:1,inputDevice:'',outputDevice:'',ssid:'',password:'',channel:0,targetBluetooth:'',lastBluetooth:'',networkInterface:''};
+const defaults={language:'system',resolutionMode:'preset',strictPixels:false,fullScreen:false,closeBehavior:'ask',autoReconnect:false,wirelessMode:'hotspot',lanSsid:'',lanPassword:'',lanChannel:36,lanNetworkInterface:'',lanAccessPointMac:'',width:1280,height:720,fps:60,theme:'system',displayId:0,audioEnabled:true,mediaVolume:1,callVolume:1,inputDevice:'',outputDevice:'',ssid:'',password:'',channel:0,targetBluetooth:'',lastBluetooth:'',networkInterface:''};
 let systemMedia,tray,updates,startController,nativeMonitorRead,nativeMonitors=[],updatePromptOpen=false,videoHidden=false;
 let videoClosePromptOpen=false,closePromptOpen=false,connectionEpoch=0,reconnecting=false;
 let settings={...defaults},main,video,engine,lastConfig,pendingFrames=[],videoReady=false,videoSized=false,videoDecoded=false,pendingVideoSettings,videoPixelSize,videoDisplayId,videoSizingTimer,running=false,closing=false;let diagnostics=[],stats={requested:60,attempt:60,receivedFps:0,decodedFps:0};
@@ -55,36 +55,75 @@ function setVideoPixels(){
 
  const handle=current.getNativeWindowHandle().readBigUInt64LE().toString();
  const fail=error=>{if(video!==current||current.isDestroyed())return;log('画面窗口尺寸设置失败',error.message);stop()};
- execFile(native,['window-pixels',handle,String(requested.width),String(requested.height)],{windowsHide:true,timeout:5000},error=>{
+ execFile(native,['window-pixels',handle,String(requested.width),String(requested.height),requested.strictPixels?'strict':'fit'],{windowsHide:true,timeout:5000},error=>{
   if(video!==current||current.isDestroyed())return;
   if(error){fail(error);return}
 
-  current.setResizable(false);
+  current.setResizable(!requested.strictPixels);
   // Win32 sizing updates the HWND, but Electron must also update its own frame
   // layout. Reapplying the bounds here avoids the first-show white non-client
   // margins that otherwise disappear only after the user moves the window.
   current.setBounds(current.getBounds());
   // Finalize the non-client frame after Electron restores the fixed style.
   // Keep this asynchronous: Win32 sends messages back to Electron's UI thread.
-  execFile(native,['window-frame',handle],{windowsHide:true,timeout:5000},(error,out)=>{
+  execFile(native,['window-frame',handle,String(requested.width),String(requested.height),requested.strictPixels?'strict':'fit'],{windowsHide:true,timeout:5000},(error,out)=>{
    if(video!==current||current.isDestroyed())return;
    if(error){fail(error);return}
    try{
-    const actual=JSON.parse(out);current.videoBorderResult=actual.borderResult;
-    if(actual.clientWidth!==requested.width||actual.clientHeight!==requested.height)throw Error('物理像素尺寸不一致');
-    current.webContents.send('event',{type:'video-viewport',width:requested.width,height:requested.height});
-    videoSized=true;
+    const actual=JSON.parse(out);current.videoBorderResult=actual.borderResult;if(!requested.strictPixels)videoPixelSize={...requested,width:actual.clientWidth,height:actual.clientHeight};
+    // Keep the video viewport exact; rounded native borders may leave up to two
+    // logical pixels of black padding. They must not tear down a valid session.
+    if(requested.strictPixels&&(actual.clientWidth<requested.width||actual.clientHeight<requested.height||actual.clientWidth-requested.width>Math.ceil(2*screen.getDisplayMatching(current.getBounds()).scaleFactor)||actual.clientHeight-requested.height>Math.ceil(2*screen.getDisplayMatching(current.getBounds()).scaleFactor)))throw Error('窗口物理像素尺寸不一致，请关闭严格物理像素显示后重新连接；请求'+requested.width+'×'+requested.height+'，实际'+actual.clientWidth+'×'+actual.clientHeight);
+    current.webContents.send('event',{type:'video-viewport',width:requested.strictPixels?requested.width:actual.clientWidth,height:requested.strictPixels?requested.height:actual.clientHeight,strictPixels:requested.strictPixels});
+    
+    videoSized=true;alignVideoContent(current);
     if(!selfTest&&videoDecoded&&!videoHidden){current.show();current.focus()}
    }catch(error){fail(error)}
   });
  });
 }
-function createVideo(config=pendingVideoSettings||settings){if(video&&!video.isDestroyed())return;const target=selectedDisplay(config),size=videoSize(config,displayPixels(target)),bounds=dipVideoBounds(target,size);videoPixelSize=size;videoDisplayId=target.id;videoReady=false;videoSized=false;videoDecoded=false;videoHidden=false;
+function alignVideoContent(current){
+ if(video!==current||current.isDestroyed()||!videoSized||videoPixelSize?.strictPixels||current.isMinimized())return;
+ const ratio=current.videoAspectRatio;if(!Number.isFinite(ratio)||ratio<=0)return;
+ const [width,height]=current.getContentSize(),work=screen.getDisplayMatching(current.getBounds()).workArea;
+ const outer=current.getBounds(),caption=outer.height-height;
+ const fittedWidth=Math.max(1,Math.min(width,work.width-(outer.width-width),Math.floor((work.height-caption)*ratio)));
+ const fittedHeight=Math.max(1,Math.round(fittedWidth/ratio));
+ if(Math.abs(width-fittedWidth)>1||Math.abs(height-fittedHeight)>1)current.setBounds({...outer,width:outer.width+fittedWidth-width,height:outer.height+fittedHeight-height});
+}
+// Apply one client-area ratio constraint before a manual resize. There is no
+// native aspect constraint or resize callback competing with this operation.
+function resizeVideoContent(current,proposed,edge){
+ const old=current.getBounds(),[cw,ch]=current.getContentSize();
+ const borderW=old.width-cw,borderH=old.height-ch,ratio=current.videoAspectRatio;
+ if(!Number.isFinite(ratio)||ratio<=0)return;
+ const vertical=edge==='top'||edge==='bottom';
+ const width=Math.max(320,Math.round(vertical?(proposed.height-borderH)*ratio:proposed.width-borderW));
+ const height=Math.max(1,Math.round(width/ratio));
+ const next={x:old.x,y:old.y,width:width+borderW,height:height+borderH};
+ if(edge.includes('left'))next.x=old.x+old.width-next.width;
+ if(edge.includes('top'))next.y=old.y+old.height-next.height;
+ current.setBounds(next);
+ // Windows fractional DPI can round the non-client frame differently at the
+ // new size. Resolve that rounding synchronously, retaining the anchored edge.
+ for(let attempt=0;attempt<2;attempt++){
+  const actual=current.getBounds(),[w,h]=current.getContentSize();
+  const delta=Math.round(w/ratio)-h;if(Math.abs(delta)<=1)break;
+  current.setBounds({...actual,height:actual.height+delta,y:edge.includes('top')?actual.y-delta:actual.y});
+ }
+}
+function createVideo(config=pendingVideoSettings||settings){if(video&&!video.isDestroyed())return;const target=selectedDisplay(config),size=presentationSize(config,target,displayPixels(target)),bounds=dipVideoBounds(target,size);videoPixelSize=size;videoDisplayId=target.id;videoReady=false;videoSized=false;videoDecoded=false;videoHidden=false;
  video=new BrowserWindow({...bounds,resizable:false,maximizable:false,fullscreenable:false,frame:!size.fullScreen,thickFrame:true,roundedCorners:false,title:'WinPlay · CarPlay',icon:path.join(resources,'icons','winplay-256.png'),show:false,backgroundColor:'#000000',autoHideMenuBar:true,webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,backgroundThrottling:false}});
- updateTray();video.on('minimize',()=>{videoHidden=true});video.on('restore',()=>{videoHidden=false});video.setMenu(null);video.webContents.setVisualZoomLevelLimits(1,1);video.webContents.on('before-input-event',(event,input)=>{if(input.type==='keyDown'&&input.key==='Escape'){event.preventDefault();minimizeVideo()}if((input.control||input.meta)&&['+','-','=','0'].includes(input.key))event.preventDefault()});video.on('will-resize',event=>event.preventDefault());setVideoPixels();
+ video.videoAspectRatio=config.width/config.height;
+
+ updateTray();video.on('minimize',()=>{videoHidden=true});video.on('restore',()=>{videoHidden=false});video.setMenu(null);video.webContents.setVisualZoomLevelLimits(1,1);video.webContents.on('before-input-event',(event,input)=>{if(input.type==='keyDown'&&input.key==='Escape'){event.preventDefault();minimizeVideo()}if((input.control||input.meta)&&['+','-','=','0'].includes(input.key))event.preventDefault()});video.on('will-resize',(event,bounds,details)=>{
+  event.preventDefault();
+  if(!videoSized||videoPixelSize?.strictPixels)return;
+  resizeVideoContent(video,bounds,details.edge);
+ });setVideoPixels();
  video.on('close',async event=>{if(closing||!(running||reconnecting))return;event.preventDefault();if(videoClosePromptOpen)return;videoClosePromptOpen=true;const current=video,epoch=connectionEpoch;try{const choice=await dialog.showMessageBox(current,dialogText({type:'question',title:'断开CarPlay',message:'您确定要断开与iPhone的连接吗？',detail:'断开后将关闭CarPlay画面，并停止接收。',buttons:['断开连接','取消'],defaultId:1,cancelId:1,noLink:true}));if(choice.response===0&&video===current&&!current.isDestroyed()&&connectionEpoch===epoch)stop()}catch(e){if(video===current&&!current.isDestroyed())log('断开确认无法显示',e.message)}finally{videoClosePromptOpen=false}});
  video.loadFile(path.join(uiRoot,'video.html'));video.on('closed',()=>{video=undefined;videoReady=false;videoSized=false;videoDecoded=false;updateTray();if((running||reconnecting)&&!closing)stop()});video.webContents.setWindowOpenHandler(()=>({action:'deny'}));video.webContents.on('will-navigate',e=>e.preventDefault());
- video.webContents.on('did-finish-load',()=>{videoReady=true;video.webContents.setZoomFactor(1);video.webContents.send('event',{type:'video-viewport',width:videoPixelSize.width,height:videoPixelSize.height,fullScreen:videoPixelSize.fullScreen});if(lastConfig)video.webContents.send('event',lastConfig);for(const frame of pendingFrames)video.webContents.send('event',frame);pendingFrames=[]})
+ video.webContents.on('did-finish-load',()=>{videoReady=true;video.webContents.setZoomFactor(1);video.webContents.send('event',{type:'video-viewport',width:videoPixelSize.width,height:videoPixelSize.height,fullScreen:videoPixelSize.fullScreen,strictPixels:videoPixelSize.strictPixels});if(lastConfig)video.webContents.send('event',lastConfig);for(const frame of pendingFrames)video.webContents.send('event',frame);pendingFrames=[]})
 }
 function closeVideo(){videoReady=false;videoDecoded=false;pendingFrames=[];lastConfig=undefined;if(video&&!video.isDestroyed()){const win=video;video=undefined;win.destroy()}updateTray()}
 function worker(){return fork(path.join(engineRoot,'build/engine/run.js'),[],{execPath:runtime,execArgv:[],windowsHide:true,stdio:['ignore','ignore','ignore','ipc'],serialization:'advanced',env:{...process.env,WINPLAY_DATA:dataDir,WINPLAY_NATIVE:native,WINPLAY_RESOURCES:resources}})}
@@ -163,7 +202,7 @@ function checkSender(event){const windows=[main,video].filter(Boolean);if(!windo
 function authExists(){return ['identity.pk8.dpapi','certificate.p7b.dpapi'].every(n=>fs.existsSync(path.join(dataDir,'authentication',n)))||['identity.pk8','certificate.p7b'].every(n=>fs.existsSync(path.join(resources,'authentication',n)))}
 ipcMain.handle('call',async(event,op,arg)=>{checkSender(event);try{switch(op){
  case 'state':return {ok:true,settings,version:app.getVersion(),locale:app.getLocale(),architecture:process.arch,updates:updates?.state(),running:running||passiveReconnect.active,dark:nativeTheme.shouldUseDarkColors,auth:authExists(),stats,diagnostics};
- case 'save':{if(Object.hasOwn(arg,'closeBehavior'))validateCloseBehavior(arg.closeBehavior);const allowed=Object.keys(defaults);const next={...settings};for(const key of allowed)if(Object.hasOwn(arg,key)&&typeof arg[key]===typeof defaults[key])next[key]=arg[key];if(!['system','zh-Hans','zh-Hant','en'].includes(next.language))throw Error('语言无效');if(!['system','light','dark'].includes(next.theme))throw new Error('主题无效');next.mediaVolume=Math.max(0,Math.min(1,next.mediaVolume));next.callVolume=Math.max(0,Math.min(1,next.callVolume));if(!['hotspot','lan'].includes(next.wirelessMode))throw new Error('无线模式无效');if(['width','height','fullScreen','resolutionMode','displayId'].some(key=>Object.hasOwn(arg,key)))videoSize(next,displayPixels(screen.getAllDisplays().find(d=>d.id===next.displayId)||screen.getPrimaryDisplay()));const languageChanged=next.language!==settings.language;save(next);settings=next;if(!settings.autoReconnect&&passiveReconnect.active){passiveReconnect.cancel();if(!running)stopped()}if(languageChanged){updateTray();send('language',{language:settings.language,locale:app.getLocale()})}nativeTheme.themeSource=settings.theme;send('appearance',{dark:nativeTheme.shouldUseDarkColors});command({command:'audio',mediaVolume:settings.mediaVolume,callVolume:settings.callVolume});send('audio-enabled',{enabled:settings.audioEnabled});if(!running)send('audio-devices',{inputDevice:settings.inputDevice,outputDevice:settings.outputDevice});return {ok:true};}
+ case 'save':{if(Object.hasOwn(arg,'closeBehavior'))validateCloseBehavior(arg.closeBehavior);const allowed=Object.keys(defaults);const next={...settings};for(const key of allowed)if(Object.hasOwn(arg,key)&&typeof arg[key]===typeof defaults[key])next[key]=arg[key];if(!['system','zh-Hans','zh-Hant','en'].includes(next.language))throw Error('语言无效');if(!['system','light','dark'].includes(next.theme))throw new Error('主题无效');next.mediaVolume=Math.max(0,Math.min(1,next.mediaVolume));next.callVolume=Math.max(0,Math.min(1,next.callVolume));if(!['hotspot','lan'].includes(next.wirelessMode))throw new Error('无线模式无效');if(['width','height','fullScreen','strictPixels','resolutionMode','displayId'].some(key=>Object.hasOwn(arg,key)))videoSize(next,displayPixels(screen.getAllDisplays().find(d=>d.id===next.displayId)||screen.getPrimaryDisplay()));const languageChanged=next.language!==settings.language;save(next);settings=next;if(!settings.autoReconnect&&passiveReconnect.active){passiveReconnect.cancel();if(!running)stopped()}if(languageChanged){updateTray();send('language',{language:settings.language,locale:app.getLocale()})}nativeTheme.themeSource=settings.theme;send('appearance',{dark:nativeTheme.shouldUseDarkColors});command({command:'audio',mediaVolume:settings.mediaVolume,callVolume:settings.callVolume});send('audio-enabled',{enabled:settings.audioEnabled});if(!running)send('audio-devices',{inputDevice:settings.inputDevice,outputDevice:settings.outputDevice});return {ok:true};}
  case 'start':if(!authExists())throw new Error('请先在关于页导入有使用权限的配套认证材料');await start();return {ok:true};
  case 'restart':{if(!authExists())throw Error('请先导入认证文件');const target=selectedDisplay(),size=videoSize(settings,displayPixels(target));validateSettings({...resolveConnectionSettings(settings),width:size.width,height:size.height,targetBluetooth:settings.targetBluetooth||settings.lastBluetooth},{network:settings.wirelessMode!=='hotspot'});const snapshot={...settings};stop();const ticket=connectionEpoch+1;await start(snapshot);if(connectionEpoch!==ticket)return {ok:false,error:'重新连接已取消'};return {ok:true};}
  case 'show-video':if(!video||video.isDestroyed())throw Error('画面窗口尚未创建');if(!videoSized||!videoDecoded)throw Error('正在准备画面窗口');restoreVideo();return {ok:true};
@@ -186,18 +225,19 @@ ipcMain.handle('call',async(event,op,arg)=>{checkSender(event);try{switch(op){
  case 'export-diagnostics':{const destination=await dialog.showSaveDialog(main,{title:t('导出日志'),defaultPath:'WinPlay-'+app.getVersion()+'-diagnostics.json',filters:[{name:'JSON',extensions:['json']}]});if(destination.canceled)return {ok:false,error:'已取消导出'};fs.writeFileSync(destination.filePath,JSON.stringify({version:app.getVersion(),platform:process.platform,metrics:stats,authenticationImported:authExists(),messages:redactDiagnostics(diagnostics)},null,2));return {ok:true};}
  default:throw new Error('未知操作');}}catch(e){return {ok:false,error:e.message}}});
 const testInputs=[];
-ipcMain.on('input',(event,msg)=>{checkSender(event);if(selfTest&&msg.command==='touch')testInputs.push(msg);const allowed=['touch','media','seek','mic','video-ack','video-recover','request-keyframe'];if(allowed.includes(msg.command))command(msg);if(msg.command==='decoded'){stats.decodedFps=msg.fps;stats.decodedWidth=msg.width;stats.decodedHeight=msg.height;send('metrics',stats)}if(msg.command==='video-visible'&&video&&!video.isDestroyed()){videoDecoded=true;if((!selfTest||windowSelfTest)&&videoSized&&!videoHidden){video.show();video.focus()}}if(msg.command==='video-minimize'&&video&&!video.isDestroyed())minimizeVideo();if(msg.command==='video-close'&&video&&!video.isDestroyed())video.close();if(msg.command==='video-recovery')log('视频解码恢复',String(msg.reason).slice(0,200));if(msg.command==='decode-error'){log('视频解码失败',msg.reason);stop()}if(msg.command==='audio-diagnostic')log('音频运行统计',String(msg.reason).slice(0,800));if(msg.command==='audio-error')log('音频处理需要检查',String(msg.reason).slice(0,200))});
+ipcMain.on('input',(event,msg)=>{checkSender(event);if(selfTest&&msg.command==='touch')testInputs.push(msg);const allowed=['touch','media','seek','mic','video-ack','video-recover','request-keyframe'];if(allowed.includes(msg.command))command(msg);if(msg.command==='decoded'){stats.decodedFps=msg.fps;stats.decodedWidth=msg.width;stats.decodedHeight=msg.height;send('metrics',stats)}if(msg.command==='video-size'&&video&&!video.isDestroyed()&&Number.isInteger(msg.width)&&Number.isInteger(msg.height)&&msg.width>=1&&msg.height>=1&&msg.width<=16384&&msg.height<=16384){video.videoAspectRatio=msg.width/msg.height;if(!videoPixelSize?.strictPixels){alignVideoContent(video)}}if(msg.command==='video-visible'&&video&&!video.isDestroyed()){videoDecoded=true;if((!selfTest||windowSelfTest)&&videoSized&&!videoHidden){video.show();video.focus()}}if(msg.command==='video-minimize'&&video&&!video.isDestroyed())minimizeVideo();if(msg.command==='video-close'&&video&&!video.isDestroyed())video.close();if(msg.command==='video-recovery')log('视频解码恢复',String(msg.reason).slice(0,200));if(msg.command==='decode-error'){log('视频解码失败',msg.reason);stop()}if(msg.command==='audio-diagnostic')log('音频运行统计',String(msg.reason).slice(0,800));if(msg.command==='audio-error')log('音频处理需要检查',String(msg.reason).slice(0,200))});
 app.on('before-quit',()=>{closing=true;clearTimeout(updateStartupTimer);clearInterval(updateIntervalTimer);stop();systemMedia?.close();tray?.destroy();tray=undefined;flushDiagnostics()});
-app.whenReady().then(async()=>{fs.mkdirSync(dataDir,{recursive:true});load();await refreshNativeMonitors().catch(error=>log('显示器物理尺寸查询失败',error.message));if(windowSelfTest){runWindowSelfTest().catch(error=>{fs.mkdirSync(validationDir,{recursive:true});fs.writeFileSync(path.join(validationDir,'window-failure.txt'),error.stack);closing=true;app.exit(1)});return}if(selfTest)settings.language='zh-Hans';updates=new Updates({version:app.getVersion(),dataDir,onChange:value=>send('updates',{updates:value})});nativeTheme.themeSource=settings.theme;session.defaultSession.setPermissionRequestHandler((wc,permission,cb)=>cb(wc.id===main?.webContents.id&&permission==='media'));session.defaultSession.setPermissionCheckHandler((wc,permission)=>wc?.id===main?.webContents.id&&permission==='media');nativeTheme.on('updated',()=>send('appearance',{dark:nativeTheme.shouldUseDarkColors}));screen.on('display-metrics-changed',()=>{clearTimeout(videoSizingTimer);videoSizingTimer=setTimeout(async()=>{try{await refreshNativeMonitors();if(!video||video.isDestroyed())return;const target=screen.getAllDisplays().find(d=>d.id===videoDisplayId);if(!target)throw Error('显示器已断开');videoSize({...videoPixelSize,fullScreen:false},displayPixels(target));video.setBounds(dipVideoBounds(target,videoPixelSize));setVideoPixels()}catch(e){log('显示器配置已变化',e.message);stop()}},200)});screen.on('display-removed',()=>{if(video&&!video.isDestroyed()&&!screen.getAllDisplays().some(d=>d.id===videoDisplayId)){log('显示器已断开，请重新选择显示位置');stop()}});createMain();createTray();if(!selfTest)main.webContents.once('did-finish-load',startUpdateChecks);systemMedia=new SystemMedia(path.join(app.isPackaged?path.join(resources,'native'):path.join(root,'build/native'),'WinPlay.Media.exe'),m=>{if(['media','seek'].includes(m.command))command(m)},reason=>log('系统媒体同步失败',reason,true));if(selfTest)main.webContents.once('did-finish-load',()=>runSelfTest().catch(e=>{fs.mkdirSync(validationDir,{recursive:true});fs.writeFileSync(path.join(validationDir,'electron-failure.txt'),e.stack);app.exit(1)}))});
+app.whenReady().then(async()=>{fs.mkdirSync(dataDir,{recursive:true});load();await refreshNativeMonitors().catch(error=>log('显示器物理尺寸查询失败',error.message));if(windowSelfTest){runWindowSelfTest().catch(error=>{fs.mkdirSync(validationDir,{recursive:true});fs.writeFileSync(path.join(validationDir,'window-failure.txt'),error.stack);closing=true;app.exit(1)});return}if(selfTest)settings.language='zh-Hans';updates=new Updates({version:app.getVersion(),dataDir,onChange:value=>send('updates',{updates:value})});nativeTheme.themeSource=settings.theme;session.defaultSession.setPermissionRequestHandler((wc,permission,cb)=>cb(wc.id===main?.webContents.id&&permission==='media'));session.defaultSession.setPermissionCheckHandler((wc,permission)=>wc?.id===main?.webContents.id&&permission==='media');nativeTheme.on('updated',()=>send('appearance',{dark:nativeTheme.shouldUseDarkColors}));screen.on('display-metrics-changed',()=>{clearTimeout(videoSizingTimer);videoSizingTimer=setTimeout(async()=>{try{await refreshNativeMonitors();if(!video||video.isDestroyed())return;const target=screen.getAllDisplays().find(d=>d.id===videoDisplayId);if(!target)throw Error('显示器已断开');videoPixelSize=presentationSize(pendingVideoSettings||settings,target,displayPixels(target));video.setBounds(dipVideoBounds(target,videoPixelSize));setVideoPixels()}catch(e){log('显示器配置已变化',e.message);stop()}},200)});screen.on('display-removed',()=>{if(video&&!video.isDestroyed()&&!screen.getAllDisplays().some(d=>d.id===videoDisplayId)){log('显示器已断开，请重新选择显示位置');stop()}});createMain();createTray();if(!selfTest)main.webContents.once('did-finish-load',startUpdateChecks);systemMedia=new SystemMedia(path.join(app.isPackaged?path.join(resources,'native'):path.join(root,'build/native'),'WinPlay.Media.exe'),m=>{if(['media','seek'].includes(m.command))command(m)},reason=>log('系统媒体同步失败',reason,true));if(selfTest)main.webContents.once('did-finish-load',()=>runSelfTest().catch(e=>{fs.mkdirSync(validationDir,{recursive:true});fs.writeFileSync(path.join(validationDir,'electron-failure.txt'),e.stack);app.exit(1)}))});
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function runWindowSelfTest(){
  const result={kind:'targeted Windows taskbar minimize check',electron:process.versions.electron,checks:[]};
  const metrics=current=>new Promise((resolve,reject)=>execFile(native,['window-metrics',current.getNativeWindowHandle().readBigUInt64LE().toString()],{windowsHide:true,timeout:5000},(error,out)=>{if(error)return reject(error);try{resolve(JSON.parse(out))}catch(error){reject(error)}}));
  const check=(name,passed,detail='')=>{result.checks.push({name,passed,detail});fs.mkdirSync(validationDir,{recursive:true});fs.writeFileSync(path.join(validationDir,'window-smoke.json'),JSON.stringify(result,null,2));if(!passed)throw Error(name+': '+detail)};
  try{
-  for(const fullScreen of (process.argv.includes('--fixed-window-only')?[false]:[true,false])){
-   const mode=fullScreen?'native fullscreen':'fixed window';running=true;
-   createVideo({...settings,fullScreen,width:960,height:540});
+  for(const displayMode of (process.argv.includes('--fixed-window-only')?['fit']:['native','strict','fit'])){
+   const fullScreen=displayMode==='native',strictPixels=displayMode==='strict';
+   const mode=displayMode+' window';running=true;
+   createVideo({...settings,fullScreen,strictPixels,width:1280,height:720});
    const current=video;for(let attempt=0;attempt<50&&(!videoReady||!videoSized);attempt++)await delay(100);
    check(mode+' becomes ready',video===current&&videoReady&&videoSized&&videoPixelSize.fullScreen===fullScreen);
    check(mode+' stays hidden before a decoded frame',!current.isVisible()&&!videoDecoded);
@@ -205,9 +245,24 @@ async function runWindowSelfTest(){
    await current.webContents.executeJavaScript("winplay.input({command:'video-visible'})");for(let attempt=0;attempt<20&&!current.isVisible();attempt++)await delay(100);
    check(mode+' displays after the first decoded frame',current.isVisible()&&videoDecoded,JSON.stringify({visible:current.isVisible(),videoDecoded,videoSized,videoHidden,minimized:current.isMinimized()}));
    const initialFrame=await metrics(current);
-   check(mode+' initial physical client size is exact',initialFrame.clientWidth===videoPixelSize.width&&initialFrame.clientHeight===videoPixelSize.height,JSON.stringify(initialFrame));
+   const physicalViewport=await current.webContents.executeJavaScript(`({width:document.getElementById('screen').getBoundingClientRect().width*devicePixelRatio,height:document.getElementById('screen').getBoundingClientRect().height*devicePixelRatio})`);
+   check(mode+' video viewport matches requested physical pixels',Math.abs(physicalViewport.width-(videoPixelSize.strictPixels?videoPixelSize.width:initialFrame.clientWidth))<(videoPixelSize.strictPixels?.1:2)&&Math.abs(physicalViewport.height-(videoPixelSize.strictPixels?videoPixelSize.height:initialFrame.clientHeight))<(videoPixelSize.strictPixels?.1:2),JSON.stringify({initialFrame,physicalViewport}));
    check(mode+' initial DWM outline is suppressed where supported',current.videoBorderResult===0||Number(os.release().split('.')[2])<22000,String(current.videoBorderResult));
-   check(mode+' remains fixed size',!current.isResizable());
+   check(mode+' resize policy matches pixel mode',current.isResizable()===!videoPixelSize.strictPixels);
+   if(!videoPixelSize.strictPixels){const before=current.getContentSize();current.setContentSize(Math.round(before[0]*.8),Math.round(before[1]*.65));const untouched=current.getContentSize();await delay(150);check(mode+' resize does not trigger asynchronous size feedback',JSON.stringify(current.getContentSize())===JSON.stringify(untouched));alignVideoContent(current);await delay(100);const fitted=await current.webContents.executeJavaScript(`({width:document.getElementById('screen').getBoundingClientRect().width,height:document.getElementById('screen').getBoundingClientRect().height,innerWidth,innerHeight})`);check(mode+' resized canvas follows client area',Math.abs(fitted.width-fitted.innerWidth)<1&&Math.abs(fitted.height-fitted.innerHeight)<1&&fitted.width<before[0],JSON.stringify(fitted));check(mode+' client ratio follows video without side bars',Math.abs(fitted.width/fitted.height-current.videoAspectRatio)<.005,JSON.stringify(fitted));current.setContentSize(...before);await delay(100)}
+   if(!videoPixelSize.strictPixels){
+    const saved=current.getBounds();
+    for(const edge of ['left','right','top','bottom','top-left','top-right','bottom-left','bottom-right']){
+     const old=current.getBounds();let blocked=false;
+     current.emit('will-resize',{preventDefault(){blocked=true}},{...old,width:old.width+23,height:old.height+17},{edge});
+     const [w,h]=current.getContentSize(),stable=current.getBounds();await delay(50);
+     check(mode+' '+edge+' resize keeps client ratio',blocked&&Math.abs(w-h*current.videoAspectRatio)<=2,JSON.stringify({w,h}));
+     check(mode+' '+edge+' resize has no delayed correction',JSON.stringify(stable)===JSON.stringify(current.getBounds()));
+     if(edge.includes('left'))check(mode+' '+edge+' keeps opposite edge',Math.abs(stable.x+stable.width-old.x-old.width)<=1);
+     if(edge.includes('top'))check(mode+' '+edge+' keeps opposite vertical edge',Math.abs(stable.y+stable.height-old.y-old.height)<=1);
+    }
+    current.setBounds(saved);
+   }
    const skipRequests=[],setSkipTaskbar=current.setSkipTaskbar.bind(current);
    current.setSkipTaskbar=value=>{skipRequests.push(value);setSkipTaskbar(value)};
    const hiddenBeforeMinimize=[],minimize=current.minimize.bind(current);current.minimize=()=>{hiddenBeforeMinimize.push(videoHidden);minimize()};
@@ -216,10 +271,10 @@ async function runWindowSelfTest(){
    check(mode+' Escape minimizes and retains the session',current.isMinimized()&&!current.isDestroyed()&&video===current&&running&&videoHidden&&!videoClosePromptOpen,JSON.stringify({minimized:current.isMinimized(),visible:current.isVisible(),running,videoHidden,skipRequests}));
    await current.webContents.executeJavaScript("winplay.input({command:'video-visible'})");await delay(100);
    check(mode+' later video visibility does not restore the window',current.isMinimized()&&videoHidden&&running);
-   restoreVideo();await delay(100);
+   restoreVideo();await delay(300);
    check(mode+' restores from taskbar',!current.isMinimized()&&current.isVisible()&&!videoHidden&&running);
    const restoredFrame=await metrics(current);
-   check(mode+' restored frame retains pixel size',restoredFrame.clientWidth===initialFrame.clientWidth&&restoredFrame.clientHeight===initialFrame.clientHeight,JSON.stringify(restoredFrame));
+   check(mode+' restored frame retains pixel size',Math.abs(restoredFrame.clientWidth-initialFrame.clientWidth)<(videoPixelSize.strictPixels?1:4)&&Math.abs(restoredFrame.clientHeight-initialFrame.clientHeight)<(videoPixelSize.strictPixels?1:4),JSON.stringify(restoredFrame));
    await current.webContents.executeJavaScript("winplay.input({command:'video-minimize'})");await delay(150);
    check(mode+' renderer minimize IPC retains the window',current.isMinimized()&&!current.isDestroyed()&&videoHidden&&running&&!videoClosePromptOpen);
    check(mode+' keeps taskbar visibility and marks hidden before native minimize',skipRequests.length>=3&&skipRequests.every(value=>value===false)&&hiddenBeforeMinimize.length===2&&hiddenBeforeMinimize.every(value=>value===true));
@@ -232,6 +287,7 @@ async function runWindowSelfTest(){
 }
 async function runSelfTest(){main.showInactive();await delay(700);const dir=validationDir;fs.mkdirSync(dir,{recursive:true});const result={date:'2026-10-02',kind:'synthetic Windows Electron test',electron:process.versions.electron,packaged:app.isPackaged,parentExecArgv:process.execArgv,checks:[]};const check=(name,passed,detail='')=>{result.checks.push({name,passed,detail});fs.writeFileSync(path.join(dir,'electron-smoke.json'),JSON.stringify(result,null,2));if(!passed)throw new Error(name+' failed: '+detail)};
  check('first launch defaults to 60fps; experimental PCM control removed',settings.fps===60&&await main.webContents.executeJavaScript(`document.getElementById('fps').value==='60'&&!document.getElementById('mediaCodec')`));
+ check('first launch fits the screen with exact pixel alignment off',settings.strictPixels===false&&await main.webContents.executeJavaScript(`!document.getElementById('strictPixels').checked`));
  const physical=displayPixels(selectedDisplay());check('display request uses current Win32 physical monitor dimensions',nativeMonitors.some(item=>item.width===physical.width&&item.height===physical.height));
  main.show();main.minimize();await delay(150);check('main minimize button keeps normal taskbar window',main.isMinimized());hideMain();check('main minimizes to tray',!!tray&&!main.isVisible());restoreMain();check('tray restores main',main.isVisible());
  await main.webContents.executeJavaScript(`document.getElementById('wirelessMode').value='lan';document.getElementById('wirelessMode').dispatchEvent(new Event('change'))`);await delay(120);check('wireless-only connection UI and settings',await main.webContents.executeJavaScript(`document.getElementById('wirelessMode').options.length===2&&!document.getElementById('wireless-fields').hidden&&document.querySelectorAll('.nav').length===4`));check('LAN mode selects router settings and location action',await main.webContents.executeJavaScript(`!document.getElementById('lan-bssid').hidden&&document.getElementById('hotspot-settings').textContent==='打开定位设置'&&document.getElementById('ssid-label').textContent.includes('局域网')`));await main.webContents.executeJavaScript(`document.getElementById('wirelessMode').value='hotspot';document.getElementById('wirelessMode').dispatchEvent(new Event('change'))`);await delay(120);check('hotspot mode selects local AP settings',await main.webContents.executeJavaScript(`document.getElementById('lan-bssid').hidden&&document.getElementById('hotspot-settings').textContent==='打开移动热点'&&document.getElementById('ssid-label').textContent.includes('热点')`));

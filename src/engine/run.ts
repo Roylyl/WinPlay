@@ -64,7 +64,7 @@ async function begin(cfg:any){attemptStarted=Date.now();settings=cfg;currentFps=
   stack.on('protocol-state',(stage:string,detail:string)=>status(stage,detail));stack.deviceFilter=id=>id.replace(/[^a-f0-9]/gi,'').toLowerCase()===cfg.targetBluetooth.replace(/[^a-f0-9]/gi,'').toLowerCase();
   stack.attachSocket(socket)
  });server.on('error',error=>{if(!stopRequested){diagnostic('接收端监听失败',errorInfo(error));status('TCP17000接收端口不可用，请检查端口占用');shutdown()}});await new Promise<void>((resolve,reject)=>{server!.once('error',reject);server!.listen({port:17000,host:'::',ipv6Only:false},resolve)});if(stopRequested)return;status('网络接收端已就绪','TCP17000；IPv4/IPv6双栈监听；接入点标识：'+(cfg.wirelessMode==='lan'&&cfg.accessPointMac?'已提供':'使用接口标识'))
- bonjour=new Discovery(cfg.networkInterface,{deviceId,pk:identity.pkHex,pi:identity.pairingId,btMac:bt.adapter},cfg.targetBluetooth,()=>!!accessory?.authenticated,s=>status(s))
+ bonjour=new Discovery(cfg.networkInterface,{deviceId,pk:identity.pkHex,pi:identity.pairingId,btMac:bt.adapter},cfg.targetBluetooth,()=>!!accessory?.authenticated&&!controlConnections&&!stopRequested,s=>send({type:'diagnostic',status:s}))
  let stream:Duplex
  status('连接iPhone蓝牙RFCOMM服务');bluetooth=spawn(process.env.WINPLAY_NATIVE!,['bluetooth',cfg.targetBluetooth],{windowsHide:true});let bluetoothError='';bluetooth.stderr!.on('data',b=>bluetoothError=(bluetoothError+b).slice(-512));bluetooth.on('error',()=>{status('蓝牙桥接启动失败');shutdown()});bluetooth.on('exit',code=>{if(stopRequested||bluetoothReleased)return;if(!hadVideo&&code!==0){status('蓝牙RFCOMM连接失败',bluetoothError);shutdown()}})
   let firstBluetoothData=true;stream=new Duplex({read(){},write(chunk,_encoding,cb){btSentBytes+=chunk.length;bluetooth!.stdin!.write(chunk,cb)}});bluetooth.stdout!.on('data',b=>{btReceivedBytes+=b.length;if(firstBluetoothData){firstBluetoothData=false;diagnostic('蓝牙首批数据到达',{bytes:b.length})}stream.push(b)});bluetooth.stdout!.on('end',()=>{diagnostic('蓝牙接收通道关闭',{btReceivedBytes,btSentBytes,released:bluetoothReleased});stream.push(null)});stream.on('close',()=>bluetooth?.kill());bluetooth.on('exit',(code,signal)=>diagnostic('蓝牙桥接退出',{exitCode:code,signal,released:bluetoothReleased,videoReceived:hadVideo,btReceivedBytes,btSentBytes}));
@@ -74,7 +74,7 @@ async function begin(cfg:any){attemptStarted=Date.now();settings=cfg;currentFps=
  handoffRecovery=new HandoffRecovery({alternateHost:nic.alternateHost,onFallback:host=>{
   if(stopRequested||controlConnections||!accessory?.authenticated)return;
   if(!openLinks.has(activeLink)){status('网络发现：蓝牙通道已关闭，保留原网络等待期限');return}
-  handoff.host=host;status('正在切换CarPlay连接地址',nic.alternateFamily==='IPv6'?'改用IPv6重试；Windows网络设置保持不变。':'改用IPv4重试；Windows网络设置保持不变。');
+  handoff.host=host;bonjour?.announce();status('正在切换CarPlay连接地址',nic.alternateFamily==='IPv6'?'改用IPv6重试；Windows网络设置保持不变。':'改用IPv4重试；Windows网络设置保持不变。');
   accessory.startCarPlay().catch(()=>{if(!stopRequested&&!controlConnections)status('网络发现：备用连接参数未能发送，保留原网络等待期限')})
  },onWait:cfg.wirelessMode==='lan'?()=>{if(!stopRequested&&!controlConnections)status('仍在等待iPhone网络连接',networkWaitDetail)}:undefined})
  if(controlConnections)handoffRecovery.networkConnected()
@@ -83,10 +83,10 @@ async function begin(cfg:any){attemptStarted=Date.now();settings=cfg;currentFps=
    // The network iAP relay also negotiates after video has started.
    // It must not restart handoff timers or replace an established state.
    negotiations++;diagnostic('iAP参数协商完成',{transport:tunnel?'network':'bluetooth',negotiations,networkConnected:!!controlConnections,videoReceived:hadVideo});if(controlConnections)return;
-   guard?.negotiationStarted();handoffRecovery?.negotiationStarted();
+   guard?.negotiationStarted();handoffRecovery?.negotiationStarted();bonjour?.announce();
    // Address retries and repeated iPhone requests must not extend a failed
    // network attempt indefinitely or disturb an already established session.
-   if(!controlConnections&&!networkDeadline)networkDeadline=setTimeout(()=>{if(!controlConnections&&!stopRequested){status('iPhone网络连接超时',networkWaitDetail);shutdown()}},45000);
+   if(!controlConnections&&!networkDeadline)networkDeadline=setTimeout(()=>{if(!controlConnections&&!stopRequested){diagnostic('网络交接超时',bonjour?.summary()||{});status('iPhone网络连接超时',networkWaitDetail);shutdown()}},45000);
    if(currentFps<=60&&!videoDeadline)armVideoDeadline();
    status('已发送CarPlay参数，等待iPhone网络连接')
   }});current.on('failed',s=>{if(accessory===current){status(s);shutdown()}})
