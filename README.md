@@ -5,7 +5,7 @@
 <p align="center">把iPhone的CarPlay带到Windows，支持无线连接、独立画面窗口、音频播放与鼠标/触控板操作。</p>
 
 <p align="center">
-  <a href="package.json"><img src="https://img.shields.io/badge/source-1.2.3-2563eb?style=flat-square" alt="源码版本1.2.3"></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/source-1.2.4-2563eb?style=flat-square" alt="源码版本1.2.4"></a>
   <a href="https://github.com/Roylyl/WinPlay/releases/latest"><img src="https://img.shields.io/github/v/release/Roylyl/WinPlay?style=flat-square&amp;label=release&amp;color=2563eb" alt="GitHub最新正式发行版"></a>
   <a href="#使用条件"><img src="https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-555555?style=flat-square" alt="Windows10/11x64"></a>
   <a href="#无线连接"><img src="https://img.shields.io/badge/CarPlay-wireless-2563eb?style=flat-square" alt="无线CarPlay"></a>
@@ -24,7 +24,7 @@
   <a href="https://github.com/Roylyl/WinPlay/commits"><img src="https://img.shields.io/github/last-commit/Roylyl/WinPlay?style=flat-square&amp;label=last%20commit&amp;color=555555" alt="最近提交时间"></a>
 </p>
 
-<p align="center"><a href="#快速入门">快速入门</a> · <a href="#主要功能">主要功能</a> · <a href="#显示与窗口">显示与窗口</a> · <a href="#音频与媒体控件">音频与媒体</a> · <a href="#其他平台">其他平台</a> · <a href="#从源码构建">源码构建</a> · <a href="docs/RELEASE-1.2.3.md">1.2.3版本说明</a></p>
+<p align="center"><a href="#快速入门">快速入门</a> · <a href="#主要功能">主要功能</a> · <a href="#显示与窗口">显示与窗口</a> · <a href="#音频与媒体控件">音频与媒体</a> · <a href="#其他平台">其他平台</a> · <a href="#从源码构建">源码构建</a> · <a href="docs/RELEASE-1.2.4.md">1.2.4版本说明</a></p>
 
 <p align="center"><a href="https://github.com/Roylyl/WinPlay/releases/latest">下载安装包</a> · <a href="#快速入门">使用方法</a> · <a href="https://github.com/Roylyl/WinPlay/issues">反馈问题</a></p>
 
@@ -47,7 +47,7 @@ WinPlay接续[MacPlay](https://github.com/Roylyl/MacPlay)，把独立CarPlay窗�
 
 ### 安装
 
-在[GitHubReleases](https://github.com/Roylyl/WinPlay/releases)下载`WinPlay-1.2.3-Setup-x64.exe`，按向导完成安装。单个EXE内置运行组件，可离线安装；开发者也可[从源码构建](#从源码构建)。
+在[GitHubReleases](https://github.com/Roylyl/WinPlay/releases)下载安装包，按向导完成安装；1.2.4对应`WinPlay-1.2.4-Setup-x64.exe`。单个EXE内置运行组件，可离线安装；开发者也可[从源码构建](#从源码构建)。
 
 首次默认1280×720、60fps、可等比例缩放的窗口、系统默认输入/输出设备、100%音量与跟随系统语言。当前安装包未做发行代码签名，Windows可能显示安全提示。
 
@@ -59,16 +59,20 @@ WinPlay接续[MacPlay](https://github.com/Roylyl/MacPlay)，把独立CarPlay窗�
 
 1. 在Windows蓝牙设置中配对iPhone，回到WinPlay点击“刷新iPhone列表”并选择目标。
 2. 选择本机移动热点或现有局域网，按下表准备网络。
-3. 点击“读取当前网络和密码”自动填入配置，读取失败的部分可手动填写。网络接口默认“自动检测”，也可手动选择。
+3. 网络接口保持“自动选择（推荐）”，点击“读取当前网络和密码”填入配置，读取失败的部分可手动填写。普通使用无需选择网卡。
 4. 点击“启动接收”，在iPhone上确认允许CarPlay。收到视频并完成首帧解码后，独立画面窗口自动显示。
 5. 修改连接、显示或音频设备后，点击“应用并重新连接”。
 
 | 无线模式 | 网络准备 | 接口检测 |
 | --- | --- | --- |
 | 本机移动热点 | 在Windows设置中开启移动热点；读取系统设置中的热点名称和密码，信道0表示自动发现 | 识别Windows实际用于热点共享的私有接口，等待链路与地址就绪 |
-| 现有局域网 | Windows与iPhone加入同一Wi-Fi；读取当前网络、实际信道和对应的已保存密码 | 选择已连接的物理网络接口，可按需填写接入点BSSID |
+| 现有局域网 | 电脑可通过Wi-Fi或网线接入路由器，iPhone加入同一路由器的Wi-Fi | 自动选择可用的Wi-Fi或以太网接口；使用Wi-Fi时，从同一接口读取网络名称、实际信道和保存的密码 |
 
-热点模式读取Windows移动热点自身的名称与密码，不读取保存的Wi-Fi密码；局域网模式读取当前Wi-Fi及同一网卡对应的保存配置。读取失败时显示原因并保留原输入，可手动补齐。启动热点接收前会刷新系统配置，避免使用已修改的旧名称或密码。
+连接页显示当前使用的Wi-Fi、网线连接或移动热点，以及下一步操作。需要指定接口时，展开“手动选择网卡（高级）”；也可点击“恢复自动选择”交给WinPlay判断。读取网络和密码不会把自动选择改成固定网卡。
+
+热点模式读取Windows移动热点自身的名称与密码，不读取保存的Wi-Fi密码；局域网模式的自动选择和凭据读取使用同一接口。电脑使用以太网时，无法通过网线读取iPhone要连接的Wi-Fi密码，请手动填写该Wi-Fi名称、密码及实际信道一次，后续保留使用；启动后按提示在iPhone上加入该Wi-Fi。
+
+读取失败时显示原因并保留原输入，可手动补齐。启动热点接收前会刷新系统配置，避免使用已修改的旧名称或密码。
 
 Wi-Fi共享密码需为8—63位，企业802.1X、网页登录与访客网络的客户端隔离可能阻止连接。防火墙需允许WinPlay与iPhone互访以及Bonjour多播。停止接收不会关闭Windows移动热点。
 
@@ -104,11 +108,13 @@ Wi-Fi共享密码需为8—63位，企业802.1X、网页登录与访客网络的
 
 普通CarPlay窗口可以拖动标题栏移动。关闭严格物理像素对齐时，可拖动边框等比例缩放；开启后固定画面尺寸，禁止拖动边框调整大小。默认按屏幕空间适配：以约960×540个逻辑像素为基准，按视频比例缩放，并限制在屏幕可用区域的80%以内，为标题栏和任务栏留出空间。窗口在所选屏幕居中显示，收到视频并完成首帧解码后才打开。
 
-“严格按屏幕物理像素显示”默认关闭。开启后，1个视频像素对应1个屏幕物理像素，Windows缩放不会改变画面的物理尺寸。该选项与分辨率、显示器设置一起，在点击“应用并重新连接”后生效。
+“严格按屏幕物理像素显示”默认关闭，仅在成功读取所选显示器的真实像素尺寸后允许开启。开启后，1个视频像素对应1个屏幕物理像素，Windows缩放不会改变画面的物理尺寸。该选项与分辨率、显示器设置一起，在点击“应用并重新连接”后生效。
+
+检测中或读取失败时，严格显示和屏幕原生像素暂时不可用，普通模式仍可启动并等比例缩放窗口。可点击“显示位置”旁的“刷新”重新检测，成功后再手动开启精确显示。
 
 请求分辨率与窗口显示大小分开：默认仍向iPhone请求1280×720视频。视频保持比例，剩余区域留黑边；选择屏幕原生像素或屏幕最大分辨率时全屏窗口化显示，始终使用屏幕物理像素。
 
-请求分辨率超出所选屏幕时会在分辨率卡片提示错误并保留输入。严格模式下，画面加标题栏超出可用区域时需降低分辨率或改用屏幕原生像素；默认适配模式会按比例缩小窗口，不改变请求分辨率。CarPlay自身的“智能缩放显示”可能改变界面内容大小，可在iPhone上调整。
+成功读取屏幕像素后，请求分辨率超出所选屏幕时会在分辨率卡片提示错误并保留输入。严格模式下，画面加标题栏超出可用区域时需降低分辨率或改用屏幕原生像素；默认适配模式会按比例缩小窗口，不改变请求分辨率。CarPlay自身的“智能缩放显示”可能改变界面内容大小，可在iPhone上调整。
 
 帧率可选30/60/90/120fps，默认60fps。120的视频启动失败后尝试90，再失败尝试60；高帧率是请求上限，实际输出取决于iPhone、网络与解码能力。在“显示→流畅度→接收统计”可分别查看请求、本次尝试、实际接收和解码帧率，屏幕刷新率不作为视频帧率。
 
@@ -178,6 +184,7 @@ WinPlay向Windows系统媒体控件同步iPhone上报的播放状态、标题、
 | 已连接后画面黑屏或出现异常色块 | 查看视频恢复提示并尝试应用重连；源端压缩也可能影响渐变色阶，持续异常时导出日志 |
 | 无法读取网络或保存的密码 | 查看对应按钮下方的实际错误，检查Windows权限，或手动填写 |
 | 提示物理像素尺寸不一致 | 关闭“严格按屏幕物理像素显示”并应用重连；默认适配模式使用实际画面区域尺寸 |
+| 无法读取物理像素，严格显示开关不可用 | 可继续使用普通模式；点击“显示位置”旁的“刷新”，读取成功后再开启严格显示或选择屏幕原生像素 |
 | 蓝牙认证通过但网络连接超时 | 确认iPhone已接入指定Wi-Fi、网卡选取正确，并允许安装目录内resources/node/node.exe通过防火墙；导出诊断日志定位服务发现与交接阶段 |
 | 自定义分辨率无法保存 | 按提示修改宽高为所选屏幕范围内的偶数像素尺寸，或选择原生像素 |
 | 系统媒体信息为空或进度无法拖动 | 音乐App需上报相应字段、有效时长与跳转能力；直播可能不提供 |
@@ -215,7 +222,7 @@ npm start
 npm run dist
 ~~~
 
-产物为`dist/WinPlay-1.2.3-Setup-x64.exe`，交付脚本同时复制到Windows桌面。本仓库的本机交付脚本会通过官方卸载程序清理已有WinPlay安装并保留用户数据，详见[交付约定](AGENTS.md)。
+产物为`dist/WinPlay-1.2.4-Setup-x64.exe`。[导出脚本](scripts/export-installer.ps1)会将安装包复制到Windows桌面，再通过官方卸载程序卸载已有WinPlay并保留用户数据。
 
 | 目录 | 内容 |
 | --- | --- |

@@ -20,8 +20,7 @@ import {
   verify as edVerify,
   generateKeyPairSync,
   hkdfSync,
-  type KeyObject,
-  randomBytes
+  type KeyObject
 } from 'node:crypto'
 
 // DER wrappers for bare 32-byte X25519/Ed25519 keys.
@@ -145,11 +144,6 @@ export function nonceLabel(label: string): Buffer {
   const n = Buffer.alloc(12)
   Buffer.from(label, 'ascii').copy(n, 4)
   return n
-}
-
-export function randomId(): string {
-  const b = randomBytes(6)
-  return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join(':')
 }
 
 // ── SHA + AES-CTR (MFiSAP /auth-setup) ──────────────────────────────────────

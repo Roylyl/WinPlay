@@ -22,7 +22,8 @@ const validationDir=process.env.WINPLAY_TEST_OUTPUT||path.join(root,'docs/valida
 const native=app.isPackaged?path.join(resources,'native','WinPlay.Platform.exe'):path.join(root,'build/native/WinPlay.Platform.exe');
 const runtime=path.join(resources,'node/node.exe'),dataDir=path.join(app.getPath('userData'),'data');
 const defaults={language:'system',resolutionMode:'preset',strictPixels:false,fullScreen:false,closeBehavior:'ask',autoReconnect:false,wirelessMode:'hotspot',lanSsid:'',lanPassword:'',lanChannel:36,lanNetworkInterface:'',lanAccessPointMac:'',width:1280,height:720,fps:60,theme:'system',displayId:0,audioEnabled:true,mediaVolume:1,callVolume:1,inputDevice:'',outputDevice:'',ssid:'',password:'',channel:0,targetBluetooth:'',lastBluetooth:'',networkInterface:''};
-let systemMedia,tray,updates,startController,nativeMonitorRead,nativeMonitors=[],updatePromptOpen=false,videoHidden=false;
+let systemMedia,tray,updates,startController,nativeMonitorRead,nativeMonitorEpoch=0,nativeMonitors=[],updatePromptOpen=false,videoHidden=false;
+let displaySaveRevision=0;
 let videoClosePromptOpen=false,closePromptOpen=false,connectionEpoch=0,reconnecting=false;
 let settings={...defaults},main,video,engine,lastConfig,pendingFrames=[],videoReady=false,videoSized=false,videoDecoded=false,pendingVideoSettings,videoPixelSize,videoDisplayId,videoSizingTimer,running=false,closing=false;let diagnostics=[],stats={requested:60,attempt:60,receivedFps:0,decodedFps:0};
 function t(text){return I18n.translate(text,settings.language,app.getLocale())}
@@ -44,17 +45,72 @@ function minimizeVideo(){if(!video||video.isDestroyed())return;videoHidden=true;
 function restoreVideo(){if(!video||video.isDestroyed()||!videoSized||!videoDecoded)return;videoHidden=false;video.setSkipTaskbar(false);video.restore();video.show();video.focus()}
 function updateTray(){tray?.setContextMenu(Menu.buildFromTemplate([{label:t('显示WinPlay'),click:restoreMain},{label:t('显示CarPlay'),enabled:!!video&&!video.isDestroyed(),click:restoreVideo},{type:'separator'},{label:t(running||passiveReconnect.active?'停止接收':'启动接收'),click:()=>{if(running||passiveReconnect.active){stop();log('接收已停止')}else if(!authExists())log('缺少认证文件','请先在关于页导入认证文件');else start().catch(e=>log('启动接收失败',e.message))}},{type:'separator'},{label:t('退出WinPlay'),click:()=>app.quit()}]))}
 function createTray(){tray=new Tray(path.join(resources,'icons','winplay.ico'));tray.setToolTip('WinPlay');tray.on('click',restoreMain);tray.on('double-click',restoreMain);updateTray()}
-function createMain(){main=new BrowserWindow({width:900,height:650,minWidth:900,minHeight:560,show:!selfTest,backgroundColor:nativeTheme.shouldUseDarkColors?'#171717':'#ffffff',title:'WinPlay',autoHideMenuBar:true,icon:path.join(resources,'icons','winplay-256.png'),webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,backgroundThrottling:false}});main.loadFile(path.join(uiRoot,'index.html'));main.on('close',async event=>{if(closing)return;event.preventDefault();if(closePromptOpen)return;closePromptOpen=true;try{const choice=await chooseCloseBehavior(settings.closeBehavior,()=>dialog.showMessageBox(main,dialogText({type:'question',title:'关闭WinPlay',message:'关闭主窗口时要执行什么操作？',detail:'最小化到托盘会保持CarPlay连接；退出会停止接收。',buttons:['退出WinPlay','最小化到托盘','取消'],defaultId:1,cancelId:2,checkboxLabel:'不再提示',checkboxChecked:false,noLink:true})));if(choice.remember){settings.closeBehavior=choice.remember;save();send('close-behavior',{value:choice.remember})}if(choice.action==='minimize')hideMain();else if(choice.action==='exit')app.quit()}finally{closePromptOpen=false}});main.webContents.setWindowOpenHandler(()=>({action:'deny'}));main.webContents.on('will-navigate',e=>e.preventDefault())}
+function createMain(){main=new BrowserWindow({width:900,height:650,minWidth:900,minHeight:560,show:!selfTest,backgroundColor:nativeTheme.shouldUseDarkColors?'#171717':'#ffffff',title:'WinPlay',autoHideMenuBar:true,icon:path.join(resources,'icons','winplay.ico'),webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,backgroundThrottling:false}});main.loadFile(path.join(uiRoot,'index.html'));main.on('close',async event=>{if(closing)return;event.preventDefault();if(closePromptOpen)return;closePromptOpen=true;try{const choice=await chooseCloseBehavior(settings.closeBehavior,()=>dialog.showMessageBox(main,dialogText({type:'question',title:'关闭WinPlay',message:'关闭主窗口时要执行什么操作？',detail:'最小化到托盘会保持CarPlay连接；退出会停止接收。',buttons:['退出WinPlay','最小化到托盘','取消'],defaultId:1,cancelId:2,checkboxLabel:'不再提示',checkboxChecked:false,noLink:true})));if(choice.remember){settings.closeBehavior=choice.remember;save();send('close-behavior',{value:choice.remember})}if(choice.action==='minimize')hideMain();else if(choice.action==='exit')app.quit()}finally{closePromptOpen=false}});main.webContents.setWindowOpenHandler(()=>({action:'deny'}));main.webContents.on('will-navigate',e=>e.preventDefault())}
 function selectedDisplay(config=settings){return screen.getAllDisplays().find(d=>d.id===config.displayId)||screen.getPrimaryDisplay()}
-function refreshNativeMonitors(){if(nativeMonitorRead)return nativeMonitorRead;nativeMonitorRead=new Promise((resolve,reject)=>execFile(native,['monitors'],{windowsHide:true,timeout:5000},(error,out,err)=>{if(error){nativeMonitors=[];reject(Error(err||'Windows显示器枚举失败'));return}try{const result=JSON.parse(out);if(!Array.isArray(result.items)||!result.items.length||result.items.some(item=>!['x','y','width','height'].every(key=>Number.isInteger(item[key]))||item.width<=0||item.height<=0))throw Error('无法读取显示器物理像素');nativeMonitors=result.items;resolve()}catch(e){nativeMonitors=[];reject(e)}})).finally(()=>{nativeMonitorRead=undefined});return nativeMonitorRead}
-function displayPixels(display){if(!nativeMonitors.length)throw Error('无法读取显示器物理像素');return physicalDisplay(display,rect=>screen.dipToScreenRect(null,rect),nativeMonitors)}
+function nativeMonitorFailure(error,stderr,elapsedMs,reason='process-failed'){
+ const detail={stage:'monitors',reason,elapsedMs:Math.max(0,Math.round(elapsedMs))};
+ // Child-process messages include the executable path and command. Retain
+ // only bounded diagnostic codes, never raw stderr or the user's paths.
+ if(error){
+  if(Number.isInteger(error.code))detail.exitCode=error.code;
+  else if(typeof error.code==='string'&&/^(?:E[A-Z0-9_]{1,63})$/.test(error.code))detail.errorCode=error.code;
+  if(typeof error.signal==='string'&&/^SIG[A-Z0-9]{1,16}$/.test(error.signal))detail.signal=error.signal;
+  detail.killed=error.killed===true;
+  detail.timedOut=detail.killed&&detail.signal==='SIGTERM'&&elapsedMs>=5000&&error.code!=='ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+  const win32=/Windows错误码\s*=\s*(-?\d{1,10})(?!\d)/.exec(String(stderr||''));
+  if(win32)detail.win32Error=Number(win32[1]);
+ }
+ return Error('Windows显示器枚举失败：'+JSON.stringify(detail));
+}
+function refreshNativeMonitors(){
+ if(nativeMonitorRead)return nativeMonitorRead;
+ const started=Date.now(),epoch=nativeMonitorEpoch;
+ nativeMonitorRead=new Promise((resolve,reject)=>execFile(native,['monitors'],{windowsHide:true,timeout:5000},(error,out,err)=>{
+  const fail=reason=>{nativeMonitors=[];reject(nativeMonitorFailure(error,err,Date.now()-started,reason))};
+  if(error){fail('process-failed');return}
+  if(epoch!==nativeMonitorEpoch){fail('display-changed');return}
+  let result;try{result=JSON.parse(out)}catch{fail('invalid-json');return}
+  if(!Array.isArray(result?.items)||!result.items.length||result.items.some(item=>!item||!['x','y','width','height'].every(key=>Number.isInteger(item[key]))||item.width<=0||item.height<=0)){fail('invalid-metrics');return}
+  nativeMonitors=result.items;resolve();
+ })).finally(()=>{nativeMonitorRead=undefined});
+ return nativeMonitorRead;
+}
+function displayPixels(display){return physicalDisplay(display,rect=>screen.dipToScreenRect(null,rect),nativeMonitors)}
+function displayCapabilities(){
+ const items=screen.getAllDisplays().map(d=>{const p=displayPixels(d);return {id:d.id,label:d.label||`显示器${d.id}`,width:p.width,height:p.height,physicalPixelsAvailable:p.verified,scaleFactor:d.scaleFactor,internal:d.internal,refreshRate:d.displayFrequency,primary:d.id===screen.getPrimaryDisplay().id}});
+ const selected=items.find(d=>d.id===selectedDisplay().id);
+ if(!selected?.physicalPixelsAvailable&&(settings.strictPixels||settings.fullScreen)){
+  const next={...settings,strictPixels:false,fullScreen:false};save(next);settings=next;
+  log('已切换为普通适配显示','未能确认所选显示器的物理像素，已关闭严格显示和屏幕原生像素；读取恢复后可手动开启',true);
+ }
+ return {ok:true,items,settings:{strictPixels:settings.strictPixels,fullScreen:settings.fullScreen}};
+}
+async function refreshDisplayCapabilities(isCurrent=()=>true){
+ await refreshNativeMonitors().catch(error=>log('显示器物理尺寸查询失败',error.message,true));
+ if(!isCurrent())return;
+ const result=displayCapabilities();send('display-capabilities',result);return result;
+}
 function setVideoPixels(){
  if(!video||video.isDestroyed()||!videoPixelSize)return;
  const current=video,requested={...videoPixelSize};videoSized=false;
  current.setResizable(true);
 
  const handle=current.getNativeWindowHandle().readBigUInt64LE().toString();
- const fail=error=>{if(video!==current||current.isDestroyed())return;log('画面窗口尺寸设置失败',error.message);stop()};
+ const fail=error=>{
+  if(video!==current||current.isDestroyed())return;
+  if(requested.strictPixels){log('画面窗口尺寸设置失败',error.message);stop();return}
+  // Fitting needs Electron's logical client area only. A native helper failure
+  // must not prevent the ordinary window from displaying a decoded frame.
+  log('画面窗口使用普通适配尺寸','原生窗口尺寸处理不可用，已使用系统逻辑尺寸保持画面比例',true);
+  current.setResizable(true);
+  const scale=screen.getDisplayMatching(current.getBounds()).scaleFactor;
+  current.setContentSize(Math.max(1,Math.round(requested.width/scale)),Math.max(1,Math.round(requested.height/scale)));
+  current.setBounds(current.getBounds());
+  const [width,height]=current.getContentSize();videoPixelSize={...requested,width:Math.round(width*scale),height:Math.round(height*scale)};
+  current.webContents.send('event',{type:'video-viewport',...videoPixelSize});
+  videoSized=true;alignVideoContent(current);
+  if(!selfTest&&videoDecoded&&!videoHidden){current.show();current.focus()}
+ };
  execFile(native,['window-pixels',handle,String(requested.width),String(requested.height),requested.strictPixels?'strict':'fit'],{windowsHide:true,timeout:5000},error=>{
   if(video!==current||current.isDestroyed())return;
   if(error){fail(error);return}
@@ -113,7 +169,7 @@ function resizeVideoContent(current,proposed,edge){
  }
 }
 function createVideo(config=pendingVideoSettings||settings){if(video&&!video.isDestroyed())return;const target=selectedDisplay(config),size=presentationSize(config,target,displayPixels(target)),bounds=dipVideoBounds(target,size);videoPixelSize=size;videoDisplayId=target.id;videoReady=false;videoSized=false;videoDecoded=false;videoHidden=false;
- video=new BrowserWindow({...bounds,resizable:false,maximizable:false,fullscreenable:false,frame:!size.fullScreen,thickFrame:true,roundedCorners:false,title:'WinPlay · CarPlay',icon:path.join(resources,'icons','winplay-256.png'),show:false,backgroundColor:'#000000',autoHideMenuBar:true,webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,backgroundThrottling:false}});
+ video=new BrowserWindow({...bounds,resizable:false,maximizable:false,fullscreenable:false,frame:!size.fullScreen,thickFrame:true,roundedCorners:false,title:'WinPlay · CarPlay',icon:path.join(resources,'icons','winplay.ico'),show:false,backgroundColor:'#000000',autoHideMenuBar:true,webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,backgroundThrottling:false}});
  video.videoAspectRatio=config.width/config.height;
 
  updateTray();video.on('minimize',()=>{videoHidden=true});video.on('restore',()=>{videoHidden=false});video.setMenu(null);video.webContents.setVisualZoomLevelLimits(1,1);video.webContents.on('before-input-event',(event,input)=>{if(input.type==='keyDown'&&input.key==='Escape'){event.preventDefault();minimizeVideo()}if((input.control||input.meta)&&['+','-','=','0'].includes(input.key))event.preventDefault()});video.on('will-resize',(event,bounds,details)=>{
@@ -165,7 +221,7 @@ async function start(config={...settings},automatic=false){
    if(detail!==lastNetworkWait){lastNetworkWait=detail;log('网络发现：热点接口检查',detail)}
   }});
   if(connectionEpoch!==ticket||!running)return;
-  if(resolved.wirelessMode==='hotspot'&&network.diagnostic&&networkDetail(network)!==lastNetworkWait)log('网络发现：热点接口检查',networkDetail(network));
+  if(network.diagnostic&&networkDetail(network)!==lastNetworkWait)log(resolved.wirelessMode==='hotspot'?'网络发现：热点接口检查':'网络发现：局域网接口检查',networkDetail(network));
   if(!network.ok)throw Error(network.error);
   resolved.networkInterface=network.name;
   if(resolved.wirelessMode==='lan'&&network.item?.wireless===false)send('lan-guide',{ssid:resolved.ssid});
@@ -202,32 +258,43 @@ function checkSender(event){const windows=[main,video].filter(Boolean);if(!windo
 function authExists(){return ['identity.pk8.dpapi','certificate.p7b.dpapi'].every(n=>fs.existsSync(path.join(dataDir,'authentication',n)))||['identity.pk8','certificate.p7b'].every(n=>fs.existsSync(path.join(resources,'authentication',n)))}
 ipcMain.handle('call',async(event,op,arg)=>{checkSender(event);try{switch(op){
  case 'state':return {ok:true,settings,version:app.getVersion(),locale:app.getLocale(),architecture:process.arch,updates:updates?.state(),running:running||passiveReconnect.active,dark:nativeTheme.shouldUseDarkColors,auth:authExists(),stats,diagnostics};
- case 'save':{if(Object.hasOwn(arg,'closeBehavior'))validateCloseBehavior(arg.closeBehavior);const allowed=Object.keys(defaults);const next={...settings};for(const key of allowed)if(Object.hasOwn(arg,key)&&typeof arg[key]===typeof defaults[key])next[key]=arg[key];if(!['system','zh-Hans','zh-Hant','en'].includes(next.language))throw Error('语言无效');if(!['system','light','dark'].includes(next.theme))throw new Error('主题无效');next.mediaVolume=Math.max(0,Math.min(1,next.mediaVolume));next.callVolume=Math.max(0,Math.min(1,next.callVolume));if(!['hotspot','lan'].includes(next.wirelessMode))throw new Error('无线模式无效');if(['width','height','fullScreen','strictPixels','resolutionMode','displayId'].some(key=>Object.hasOwn(arg,key)))videoSize(next,displayPixels(screen.getAllDisplays().find(d=>d.id===next.displayId)||screen.getPrimaryDisplay()));const languageChanged=next.language!==settings.language;save(next);settings=next;if(!settings.autoReconnect&&passiveReconnect.active){passiveReconnect.cancel();if(!running)stopped()}if(languageChanged){updateTray();send('language',{language:settings.language,locale:app.getLocale()})}nativeTheme.themeSource=settings.theme;send('appearance',{dark:nativeTheme.shouldUseDarkColors});command({command:'audio',mediaVolume:settings.mediaVolume,callVolume:settings.callVolume});send('audio-enabled',{enabled:settings.audioEnabled});if(!running)send('audio-devices',{inputDevice:settings.inputDevice,outputDevice:settings.outputDevice});return {ok:true};}
+ case 'save':{const displayChange=['width','height','fullScreen','strictPixels','resolutionMode','displayId'].some(key=>Object.hasOwn(arg,key));const revision=displayChange?++displaySaveRevision:displaySaveRevision;if(arg.strictPixels===true||arg.fullScreen===true){await refreshDisplayCapabilities(()=>revision===displaySaveRevision);if(revision!==displaySaveRevision)return {ok:false,code:'display-save-superseded'};}if(Object.hasOwn(arg,'closeBehavior'))validateCloseBehavior(arg.closeBehavior);const allowed=Object.keys(defaults);const next={...settings};for(const key of allowed)if(Object.hasOwn(arg,key)&&typeof arg[key]===typeof defaults[key])next[key]=arg[key];if(!['system','zh-Hans','zh-Hant','en'].includes(next.language))throw Error('语言无效');if(!['system','light','dark'].includes(next.theme))throw new Error('主题无效');next.mediaVolume=Math.max(0,Math.min(1,next.mediaVolume));next.callVolume=Math.max(0,Math.min(1,next.callVolume));if(!['hotspot','lan'].includes(next.wirelessMode))throw new Error('无线模式无效');if(displayChange){const physical=displayPixels(selectedDisplay(next));if(!physical.verified&&arg.strictPixels!==true&&arg.fullScreen!==true){next.strictPixels=false;next.fullScreen=false}videoSize(next,physical);}const languageChanged=next.language!==settings.language;save(next);settings=next;if(!settings.autoReconnect&&passiveReconnect.active){passiveReconnect.cancel();if(!running)stopped()}if(languageChanged){updateTray();send('language',{language:settings.language,locale:app.getLocale()})}nativeTheme.themeSource=settings.theme;send('appearance',{dark:nativeTheme.shouldUseDarkColors});command({command:'audio',mediaVolume:settings.mediaVolume,callVolume:settings.callVolume});send('audio-enabled',{enabled:settings.audioEnabled});if(!running)send('audio-devices',{inputDevice:settings.inputDevice,outputDevice:settings.outputDevice});return {ok:true,settings:{strictPixels:settings.strictPixels,fullScreen:settings.fullScreen}};}
  case 'start':if(!authExists())throw new Error('请先在关于页导入有使用权限的配套认证材料');await start();return {ok:true};
  case 'restart':{if(!authExists())throw Error('请先导入认证文件');const target=selectedDisplay(),size=videoSize(settings,displayPixels(target));validateSettings({...resolveConnectionSettings(settings),width:size.width,height:size.height,targetBluetooth:settings.targetBluetooth||settings.lastBluetooth},{network:settings.wirelessMode!=='hotspot'});const snapshot={...settings};stop();const ticket=connectionEpoch+1;await start(snapshot);if(connectionEpoch!==ticket)return {ok:false,error:'重新连接已取消'};return {ok:true};}
  case 'show-video':if(!video||video.isDestroyed())throw Error('画面窗口尚未创建');if(!videoSized||!videoDecoded)throw Error('正在准备画面窗口');restoreVideo();return {ok:true};
  case 'open-auth':{const dir=path.join(dataDir,'authentication');fs.mkdirSync(dir,{recursive:true});const error=await shell.openPath(dir);if(error)throw Error(error);return {ok:true};}
  case 'open-log':{const file=path.join(dataDir,'diagnostics.json');fs.writeFileSync(file,JSON.stringify(redactDiagnostics(diagnostics)));const error=await shell.openPath(file);if(error)throw Error(error);return {ok:true};}
  case 'settings-location':await shell.openExternal('ms-settings:privacy-location');return {ok:true};
- case 'read-current-network':return await readCurrentNetwork(arg?.mode,{interfaceName:arg?.mode==='lan'?settings.lanNetworkInterface:undefined,includePassword:true});
+ case 'read-current-network':{
+  let interfaceName;
+  if(arg?.mode==='lan'){
+   const {listNetworks,resolveNetworkSelection}=require('./network-selection.cjs'),snapshot=await listNetworks({mode:'lan'}),selection=resolveNetworkSelection('lan',settings.lanNetworkInterface,snapshot);
+   if(!selection.ok)return {ok:false,code:selection.code,error:selection.error};
+   const item=snapshot.items.find(item=>item.name===selection.name);
+   if(!item?.wireless)return {ok:false,code:'LAN_ETHERNET_CREDENTIALS',error:'电脑通过网线连接，无法读取路由器的Wi-Fi名称和密码。请填写iPhone要连接的Wi-Fi名称和密码，启动后在手机上加入该Wi-Fi。'};
+   interfaceName=selection.name;
+  }
+  return await readCurrentNetwork(arg?.mode,{interfaceName,includePassword:true});
+ }
  case 'check-updates':await updates.check();if(updates.state().status==='发现新版本')promptUpdate().catch(()=>{});return {ok:true,updates:updates.state()};
  case 'set-automatic-updates':if(typeof arg?.enabled!=='boolean')throw Error('更新选项无效');updates.setAutomatic(arg.enabled).then(value=>{if(arg.enabled&&value.automatic&&value.status==='发现新版本')promptUpdate().catch(()=>{})}).catch(()=>{});return {ok:true,updates:updates.state()};
  case 'open-release':await shell.openExternal(updates.releaseUrl());return {ok:true};
  case 'download-update':{const url=updates.state().release?.installer;if(!url)throw Error('暂无适合当前架构的安装包，请查看发行说明');await shell.openExternal(url);return {ok:true};}
  case 'open-project':await shell.openExternal('https://github.com/Roylyl/WinPlay');return {ok:true};
  case 'stop':stop();log('接收已停止');return {ok:true};
- case 'displays':await refreshNativeMonitors();return {ok:true,items:screen.getAllDisplays().map(d=>{const p=displayPixels(d);return {id:d.id,label:d.label||`显示器${d.id}`,width:p.width,height:p.height,scaleFactor:d.scaleFactor,internal:d.internal,refreshRate:d.displayFrequency,primary:d.id===screen.getPrimaryDisplay().id}})};
- case 'networks':return await require('./network-selection.cjs').listNetworks();
+ case 'displays':return await refreshDisplayCapabilities();
+ case 'networks':{const mode=arg?.mode==='lan'?'lan':'hotspot',name=mode==='lan'?settings.lanNetworkInterface:settings.networkInterface,{listNetworks,networkGuidance}=require('./network-selection.cjs'),snapshot=await listNetworks({mode});return {...snapshot,mode,...networkGuidance(mode,name,snapshot)};}
+ case 'settings-network':await shell.openExternal('ms-settings:network-status');return {ok:true};
  case 'bluetooth':return await new Promise(resolve=>execFile(native,['list'],{windowsHide:true,timeout:15000},(error,out,err)=>{if(error)return resolve({ok:false,error:err||'蓝牙设备枚举失败'});try{resolve({ok:true,...JSON.parse(out)})}catch{resolve({ok:false,error:'蓝牙枚举响应无效'})}}));
  case 'settings-hotspot':await shell.openExternal('ms-settings:network-mobilehotspot');return {ok:true};
  case 'settings-bluetooth':await shell.openExternal('ms-settings:bluetooth');return {ok:true};
  case 'import-auth':{if(running)throw new Error('请先停止接收再导入认证材料');const selection=await dialog.showOpenDialog(main,{title:t('选择identity.pk8与certificate.p7b'),filters:[{name:t('认证文件'),extensions:['pk8','p7b']}],properties:['openFile','multiSelections']});if(selection.canceled)return {ok:false,error:'已取消导入'};const keys=selection.filePaths.filter(file=>path.extname(file).toLowerCase()==='.pk8'),certs=selection.filePaths.filter(file=>path.extname(file).toLowerCase()==='.p7b');if(keys.length!==1||certs.length!==1)throw Error('请选择一个identity.pk8和一个certificate.p7b');const key={filePaths:keys},cert={filePaths:certs};const keyBytes=fs.readFileSync(key.filePaths[0]),certBytes=fs.readFileSync(cert.filePaths[0]);if(keyBytes.length>16384||certBytes.length>1024*1024)throw new Error('认证文件大小不合理');return await new Promise(resolve=>{const p=worker();const timer=setTimeout(()=>{p.kill();resolve({ok:false,error:'认证导入超时'})},15000);p.on('message',m=>{if(m.type==='auth-imported'){clearTimeout(timer);resolve({ok:true})}if(m.type==='status'){clearTimeout(timer);resolve({ok:false,error:m.status})}});p.on('error',()=>{clearTimeout(timer);resolve({ok:false,error:'认证导入进程无法启动'})});p.send({command:'import-auth',key:keyBytes,cert:certBytes})});}
  case 'export-diagnostics':{const destination=await dialog.showSaveDialog(main,{title:t('导出日志'),defaultPath:'WinPlay-'+app.getVersion()+'-diagnostics.json',filters:[{name:'JSON',extensions:['json']}]});if(destination.canceled)return {ok:false,error:'已取消导出'};fs.writeFileSync(destination.filePath,JSON.stringify({version:app.getVersion(),platform:process.platform,metrics:stats,authenticationImported:authExists(),messages:redactDiagnostics(diagnostics)},null,2));return {ok:true};}
- default:throw new Error('未知操作');}}catch(e){return {ok:false,error:e.message}}});
+ default:throw new Error('未知操作');}}catch(e){return {ok:false,error:e.message,...(e.code==='physical-pixels-unavailable'?{code:e.code}:{})}}});
 const testInputs=[];
 ipcMain.on('input',(event,msg)=>{checkSender(event);if(selfTest&&msg.command==='touch')testInputs.push(msg);const allowed=['touch','media','seek','mic','video-ack','video-recover','request-keyframe'];if(allowed.includes(msg.command))command(msg);if(msg.command==='decoded'){stats.decodedFps=msg.fps;stats.decodedWidth=msg.width;stats.decodedHeight=msg.height;send('metrics',stats)}if(msg.command==='video-size'&&video&&!video.isDestroyed()&&Number.isInteger(msg.width)&&Number.isInteger(msg.height)&&msg.width>=1&&msg.height>=1&&msg.width<=16384&&msg.height<=16384){video.videoAspectRatio=msg.width/msg.height;if(!videoPixelSize?.strictPixels){alignVideoContent(video)}}if(msg.command==='video-visible'&&video&&!video.isDestroyed()){videoDecoded=true;if((!selfTest||windowSelfTest)&&videoSized&&!videoHidden){video.show();video.focus()}}if(msg.command==='video-minimize'&&video&&!video.isDestroyed())minimizeVideo();if(msg.command==='video-close'&&video&&!video.isDestroyed())video.close();if(msg.command==='video-recovery')log('视频解码恢复',String(msg.reason).slice(0,200));if(msg.command==='decode-error'){log('视频解码失败',msg.reason);stop()}if(msg.command==='audio-diagnostic')log('音频运行统计',String(msg.reason).slice(0,800));if(msg.command==='audio-error')log('音频处理需要检查',String(msg.reason).slice(0,200))});
 app.on('before-quit',()=>{closing=true;clearTimeout(updateStartupTimer);clearInterval(updateIntervalTimer);stop();systemMedia?.close();tray?.destroy();tray=undefined;flushDiagnostics()});
-app.whenReady().then(async()=>{fs.mkdirSync(dataDir,{recursive:true});load();await refreshNativeMonitors().catch(error=>log('显示器物理尺寸查询失败',error.message));if(windowSelfTest){runWindowSelfTest().catch(error=>{fs.mkdirSync(validationDir,{recursive:true});fs.writeFileSync(path.join(validationDir,'window-failure.txt'),error.stack);closing=true;app.exit(1)});return}if(selfTest)settings.language='zh-Hans';updates=new Updates({version:app.getVersion(),dataDir,onChange:value=>send('updates',{updates:value})});nativeTheme.themeSource=settings.theme;session.defaultSession.setPermissionRequestHandler((wc,permission,cb)=>cb(wc.id===main?.webContents.id&&permission==='media'));session.defaultSession.setPermissionCheckHandler((wc,permission)=>wc?.id===main?.webContents.id&&permission==='media');nativeTheme.on('updated',()=>send('appearance',{dark:nativeTheme.shouldUseDarkColors}));screen.on('display-metrics-changed',()=>{clearTimeout(videoSizingTimer);videoSizingTimer=setTimeout(async()=>{try{await refreshNativeMonitors();if(!video||video.isDestroyed())return;const target=screen.getAllDisplays().find(d=>d.id===videoDisplayId);if(!target)throw Error('显示器已断开');videoPixelSize=presentationSize(pendingVideoSettings||settings,target,displayPixels(target));video.setBounds(dipVideoBounds(target,videoPixelSize));setVideoPixels()}catch(e){log('显示器配置已变化',e.message);stop()}},200)});screen.on('display-removed',()=>{if(video&&!video.isDestroyed()&&!screen.getAllDisplays().some(d=>d.id===videoDisplayId)){log('显示器已断开，请重新选择显示位置');stop()}});createMain();createTray();if(!selfTest)main.webContents.once('did-finish-load',startUpdateChecks);systemMedia=new SystemMedia(path.join(app.isPackaged?path.join(resources,'native'):path.join(root,'build/native'),'WinPlay.Media.exe'),m=>{if(['media','seek'].includes(m.command))command(m)},reason=>log('系统媒体同步失败',reason,true));if(selfTest)main.webContents.once('did-finish-load',()=>runSelfTest().catch(e=>{fs.mkdirSync(validationDir,{recursive:true});fs.writeFileSync(path.join(validationDir,'electron-failure.txt'),e.stack);app.exit(1)}))});
+app.whenReady().then(async()=>{fs.mkdirSync(dataDir,{recursive:true});load();await refreshDisplayCapabilities();if(windowSelfTest){runWindowSelfTest().catch(error=>{fs.mkdirSync(validationDir,{recursive:true});fs.writeFileSync(path.join(validationDir,'window-failure.txt'),error.stack);closing=true;app.exit(1)});return}if(selfTest)settings.language='zh-Hans';updates=new Updates({version:app.getVersion(),dataDir,onChange:value=>send('updates',{updates:value})});nativeTheme.themeSource=settings.theme;session.defaultSession.setPermissionRequestHandler((wc,permission,cb)=>cb(wc.id===main?.webContents.id&&permission==='media'));session.defaultSession.setPermissionCheckHandler((wc,permission)=>wc?.id===main?.webContents.id&&permission==='media');nativeTheme.on('updated',()=>send('appearance',{dark:nativeTheme.shouldUseDarkColors}));const displayChanged=()=>{++nativeMonitorEpoch;nativeMonitors=[];clearTimeout(videoSizingTimer);videoSizingTimer=setTimeout(async()=>{try{await refreshDisplayCapabilities();if(!video||video.isDestroyed())return;const target=screen.getAllDisplays().find(d=>d.id===videoDisplayId);if(!target)throw Error('显示器已断开');videoPixelSize=presentationSize(pendingVideoSettings||settings,target,displayPixels(target));video.setBounds(dipVideoBounds(target,videoPixelSize));setVideoPixels()}catch(e){log('显示器配置已变化',e.message);stop()}},200)};screen.on('display-metrics-changed',displayChanged);screen.on('display-added',displayChanged);screen.on('display-removed',()=>{if(video&&!video.isDestroyed()&&!screen.getAllDisplays().some(d=>d.id===videoDisplayId)){log('显示器已断开，请重新选择显示位置');stop()}displayChanged()});createMain();createTray();if(!selfTest)main.webContents.once('did-finish-load',startUpdateChecks);systemMedia=new SystemMedia(path.join(app.isPackaged?path.join(resources,'native'):path.join(root,'build/native'),'WinPlay.Media.exe'),m=>{if(['media','seek'].includes(m.command))command(m)},reason=>log('系统媒体同步失败',reason,true));if(selfTest)main.webContents.once('did-finish-load',()=>runSelfTest().catch(e=>{fs.mkdirSync(validationDir,{recursive:true});fs.writeFileSync(path.join(validationDir,'electron-failure.txt'),e.stack);app.exit(1)}))});
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function runWindowSelfTest(){
  const result={kind:'targeted Windows taskbar minimize check',electron:process.versions.electron,checks:[]};

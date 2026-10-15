@@ -13,10 +13,12 @@ function RoundPath([single]$x,[single]$y,[single]$w,[single]$h,[single]$r){
  return ,$p
 }
 $images=@()
-foreach($size in @(16,32,48,64,128,256,512)){
+foreach($size in @(16,20,24,32,40,48,64,128,256,512)){
  $bitmap=New-Object System.Drawing.Bitmap($size,$size)
  $drawing=[System.Drawing.Graphics]::FromImage($bitmap)
  $drawing.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+ # Sample at pixel centers so each rounded edge has matching coverage.
+ $drawing.PixelOffsetMode=[System.Drawing.Drawing2D.PixelOffsetMode]::Half
  $drawing.Clear([System.Drawing.Color]::Transparent)
  $drawing.ScaleTransform(($size/108.0),($size/108.0))
  $dark=New-Object System.Drawing.SolidBrush([System.Drawing.ColorTranslator]::FromHtml('#0C111B'))

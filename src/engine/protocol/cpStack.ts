@@ -13,7 +13,6 @@ import {
   audioReceiverLastActivityNs,
   closeAudioReceiver,
   closeMicUplink,
-  onAudioReceiverStarted,
   openAudioReceiver,
   openMicUplink,
   setAudioReceiverActive,
@@ -206,8 +205,6 @@ export class CpStack extends EventEmitter {
   constructor(private readonly cfg: CpStackConfig) {
     super()
     this._mfi = cfg.mfi
-    // The first received audio sample anchors the negotiated media clock.
-    onAudioReceiverStarted((id, firstSample) => this._audioStarted(id, firstSample))
   }
 
   private _audioStarted(id: number, firstSample: number): void {
@@ -1018,7 +1015,7 @@ export class CpStack extends EventEmitter {
       realtime: prof.audioType !== 3,
       device: this.cfg.audioDevice?.() || undefined
     }
-    const receiver = await openAudioReceiver(key, audioOpts)
+    const receiver = await openAudioReceiver(key, audioOpts, (id, firstSample) => this._audioStarted(id, firstSample))
     this._ensureSessionOpen(session, () => closeAudioReceiver(receiver.streamId))
     const {
       streamId: receiverId,

@@ -7,7 +7,12 @@
 /build/
 /dist/
 /coverage/
+/.cache/
+/native/bin/
+/native/obj/
 /README.preview.html
+/WinPlay-*-Setup-*.exe
+/WinPlay-*-更新日志.md
 *.tsbuildinfo
 *.log
 *.blockmap
@@ -40,6 +45,11 @@ diagnostics.json
 *.bak
 /.codex/
 /.idea/
+/.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
 .DS_Store
 Thumbs.db
 Desktop.ini

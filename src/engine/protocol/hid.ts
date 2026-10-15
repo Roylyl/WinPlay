@@ -339,37 +339,6 @@ export function telephonyHidDevice(displayUuid: string): PlistValue {
   return hidDeviceEntry(TELEPHONY_HID_UID, 'WinPlay Telephony', telephonyDescriptor, displayUuid)
 }
 
-export const MediaButton = {
-  none: 0,
-  play: 1,
-  pause: 2,
-  playPause: 3,
-  next: 4,
-  prev: 5,
-  navGuidance: 6
-} as const
-
-export const TelephonyButton = {
-  none: 0,
-  hookSwitch: 1,
-  flash: 2,
-  drop: 3,
-  mute: 4,
-  key0: 5,
-  key1: 6,
-  key2: 7,
-  key3: 8,
-  key4: 9,
-  key5: 10,
-  key6: 11,
-  key7: 12,
-  key8: 13,
-  key9: 14,
-  star: 15,
-  pound: 16,
-  del: 17
-} as const
-
 export interface KnobState {
   select?: boolean
   home?: boolean

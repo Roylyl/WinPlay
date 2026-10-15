@@ -5,14 +5,14 @@ function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{reso
 function fixture(mode='lan'){
  const nodes=new Map(),results=[],saves=[],reads=[];
  const config={wirelessMode:mode,lanSsid:'Old public LAN',lanChannel:6,lanNetworkInterface:'Old Wi-Fi',lanAccessPointMac:'02:00:00:00:00:08',lanPassword:'public-lan-password',ssid:'Public hotspot',password:'public-hotspot-password',channel:36,networkInterface:'Hotspot adapter'};
- const node=id=>{if(!nodes.has(id))nodes.set(id,{value:'',disabled:false,textContent:'',dataset:{}});return nodes.get(id)};
+ const node=id=>{if(!nodes.has(id))nodes.set(id,{value:'',disabled:false,textContent:'',dataset:{},listeners:new Map(),addEventListener(type,listener){this.listeners.set(type,listener)}});return nodes.get(id)};
  node('wirelessMode').value=mode;
- const context={config,$:node,pendingSaves:new Set(),networkReadBusy:false,networkReadRequest:0,
+ const context={config,$:node,pendingSaves:new Set(),networkReadBusy:false,networkReadRequest:0,networkRequest:0,networkEdits:new Map(),networkInfo:null,networkBusy:false,
   text:(id,text)=>node(id).textContent=text,result:(...values)=>results.push(values),networks:async()=>{},t:source=>source,
   winplay:{call:async(op,args)=>{reads.push({op,args});return {ok:true,mode,ssid:'Public network fixture',password:'public-read-password',channel:44,bssid:'02:00:00:00:00:02',interfaceName:mode==='lan'?'Wi-Fi 2':'Hotspot 2',passwordRead:true}}},
   call:async(op,values)=>{saves.push({op,values});return {ok:true}}
  };
- const fieldsStart=appSource.indexOf('function fieldKey('),fieldsEnd=appSource.indexOf('function state(',fieldsStart);vm.runInNewContext(appSource.slice(fieldsStart,fieldsEnd),context);
+ const fieldsStart=appSource.indexOf('function fieldKey('),fieldsEnd=appSource.indexOf('function state(',fieldsStart);vm.runInNewContext(appSource.slice(fieldsStart,fieldsEnd),context);context.bindNetworkEditing();
  const start=appSource.indexOf("$('read-network').onclick=async()=>{"),end=appSource.indexOf('\n  };',start);
  assert.ok(start>=0&&end>start);vm.runInNewContext(appSource.slice(start,end+6),context);
  return {context,nodes,node,config,results,saves,reads,read:()=>node('read-network').onclick()};
@@ -27,20 +27,20 @@ test('LAN reading saves coherent network and password values without changing ho
  const r=fixture(),save=deferred();r.context.call=(op,values)=>{r.saves.push({op,values});return save.promise};
  const operation=r.read();await tick();
  assert.equal(r.context.pendingSaves.size,1);assert.equal(r.config.lanSsid,'Old public LAN');assert.equal(r.node('read-network').disabled,true);assert.equal(r.node('read-network').textContent,'正在读取网络和密码…');
- assert.equal(r.reads[0].op,'read-current-network');assert.equal(r.reads[0].args.mode,'lan');assert.equal(Object.keys(r.saves[0].values).length,5);
+ assert.equal(r.reads[0].op,'read-current-network');assert.equal(r.reads[0].args.mode,'lan');assert.equal(Object.keys(r.saves[0].values).length,4);
  save.resolve({ok:true});await operation;
- assert.equal(r.config.lanNetworkInterface,'Wi-Fi 2');assert.equal(r.config.lanSsid,'Public network fixture');assert.equal(r.config.lanChannel,44);assert.equal(r.config.lanAccessPointMac,'02:00:00:00:00:02');assert.equal(r.config.lanPassword,'public-read-password');
+ assert.equal(r.config.lanNetworkInterface,'Old Wi-Fi');assert.equal(r.config.lanSsid,'Public network fixture');assert.equal(r.config.lanChannel,44);assert.equal(r.config.lanAccessPointMac,'02:00:00:00:00:02');assert.equal(r.config.lanPassword,'public-read-password');
  assert.equal(r.config.password,'public-hotspot-password');assert.equal(r.config.ssid,'Public hotspot');assert.equal(r.config.networkInterface,'Hotspot adapter');assert.equal(r.context.pendingSaves.size,0);
  assert.equal(r.node('password').value,'public-read-password');assert.equal(r.node('read-network').disabled,false);assert.equal(r.node('read-network').textContent,'读取当前网络和密码');
 });
 test('hotspot reading works with an empty SSID and preserves its real channel when the API does not expose one',async()=>{
  const r=fixture('hotspot');r.config.ssid='';r.node('ssid').value='';r.context.winplay.call=async(op,args)=>{r.reads.push({op,args});return {ok:true,mode:'hotspot',ssid:'Public local AP',password:'public-ap-password',interfaceName:'Hotspot 2',passwordRead:true}};
- await r.read();assert.equal(r.reads.length,1);assert.equal(r.reads[0].args.mode,'hotspot');assert.equal(r.config.ssid,'Public local AP');assert.equal(r.config.password,'public-ap-password');assert.equal(r.config.channel,36);assert.equal(r.config.networkInterface,'Hotspot 2');
- assert.equal(r.config.lanSsid,'Old public LAN');assert.equal(r.config.lanPassword,'public-lan-password');assert.equal(Object.keys(r.saves[0].values).length,3);assert.equal(r.node('read-network').disabled,false);
+ await r.read();assert.equal(r.reads.length,1);assert.equal(r.reads[0].args.mode,'hotspot');assert.equal(r.config.ssid,'Public local AP');assert.equal(r.config.password,'public-ap-password');assert.equal(r.config.channel,36);assert.equal(r.config.networkInterface,'Hotspot adapter');
+ assert.equal(r.config.lanSsid,'Old public LAN');assert.equal(r.config.lanPassword,'public-lan-password');assert.equal(Object.keys(r.saves[0].values).length,2);assert.equal(r.node('read-network').disabled,false);
 });
 test('hotspot channel zero is saved as automatic while LAN channel controls retain a minimum of one',async()=>{
  const r=fixture('hotspot');r.context.winplay.call=async()=>({ok:true,mode:'hotspot',ssid:'Public local AP',password:'public-ap-password',channel:0,channelKnown:false,warning:'公开测试：信道自动发现'});
- await r.read();assert.equal(r.config.channel,0);assert.equal(r.saves[0].values.channel,0);assert.equal(r.node('channel').value,0);assert.equal(r.node('channel').min,'0');assert.ok(r.node('network-help').textContent.includes('信道0表示自动'));assert.equal(r.config.lanChannel,6);
+ await r.read();assert.equal(r.config.channel,0);assert.equal(r.saves[0].values.channel,0);assert.equal(r.node('channel').value,0);assert.equal(r.node('channel').min,'0');assert.ok(r.node('wireless-help').textContent.includes('信道0表示自动'));assert.equal(r.config.lanChannel,6);
  r.config.wirelessMode='lan';r.context.wirelessFields();assert.equal(r.node('channel').min,'1');assert.equal(r.node('channel').value,6);assert.equal(r.node('read-network').disabled,false);
 });
 test('partial reading of the same network preserves its existing password and reports why it could not be read',async()=>{
@@ -68,6 +68,36 @@ test('mode changes during saving update only the captured mode and never replace
  ++r.context.networkReadRequest;r.config.wirelessMode='hotspot';r.node('wirelessMode').value='hotspot';r.context.wirelessFields();save.resolve({ok:true});await operation;
  assert.equal(r.config.lanSsid,'Public network fixture');assert.equal(r.config.ssid,'Public hotspot');assert.equal(r.config.password,'public-hotspot-password');assert.equal(r.node('ssid').value,'Public hotspot');assert.equal(r.node('password').value,'public-hotspot-password');assert.equal(r.results.length,1);
 });
+test('manual network edits invalidate a slow read before it can save, including unblurred input',async()=>{
+ for(const mode of ['lan','hotspot'])for(const key of ['ssid','password','channel','networkInterface','lanAccessPointMac'])for(const event of ['input','change']){
+  const r=fixture(mode),read=deferred();r.context.winplay.call=()=>read.promise;const operation=r.read();await tick();
+  r.node(key).value='Manual fixture';r.node(key).listeners.get(event)();
+  read.resolve({ok:true,mode,ssid:'Older probed SSID',password:'public-old-password',channel:44,passwordRead:true});await operation;
+  assert.equal(r.saves.length,0);assert.equal(r.node(key).value,'Manual fixture');assert.equal(r.config.lanSsid,'Old public LAN');assert.equal(r.config.ssid,'Public hotspot');assert.equal(r.context.pendingSaves.size,0);assert.equal(r.node('read-network').disabled,false);
+ }
+});
+test('a late automatic save response cannot replace a newer manual value or the active draft',async()=>{
+ const r=fixture(),save=deferred();r.context.call=(op,values)=>{r.saves.push({op,values});return save.promise};const operation=r.read();await tick();
+ r.node('ssid').value='Manual SSID';r.node('ssid').listeners.get('change')();r.config.lanSsid='Manual SSID';
+ r.node('password').value='manual-unblurred-password';r.node('password').listeners.get('input')();
+ save.resolve({ok:true});await operation;
+ assert.equal(r.config.lanSsid,'Manual SSID');assert.equal(r.node('ssid').value,'Manual SSID');assert.equal(r.node('password').value,'manual-unblurred-password');assert.equal(r.config.lanPassword,'public-lan-password');
+ assert.equal(r.config.lanChannel,44);assert.equal(r.config.lanNetworkInterface,'Old Wi-Fi');assert.equal(r.results.length,1);assert.equal(r.context.pendingSaves.size,0);
+});
+test('list refresh preserves the selected adapter through failed queries, temporary hotspot shutdown and absent devices',async()=>{
+ for(const mode of ['lan','hotspot'])for(const response of [{ok:true,queryFailed:true,items:[]},{ok:true,items:[]},{ok:true,items:[{name:mode==='lan'?'Old Wi-Fi':'Hotspot adapter',lan:false,activeHotspot:false,hotspot:mode==='hotspot'}]}]){
+  const r=fixture(mode),key=mode==='lan'?'lanNetworkInterface':'networkInterface',saved=r.config[key];r.context.winplay.call=async()=>response;
+  r.context.save=async(k,v)=>{r.saves.push({k,v});r.config[k]=v};r.context.selected=(select,items,value)=>{select.value=value};
+  vm.runInNewContext(appSource.slice(appSource.indexOf('async function networks()'),appSource.indexOf('async function bluetooth()')),r.context);await r.context.networks();
+  assert.equal(r.saves.length,0);assert.equal(r.config[key],saved);assert.equal(r.node('networkInterface').value,saved);
+ }
+});
+test('a background adapter refresh cannot replace a newer manual adapter selection',async()=>{
+ const r=fixture(),query=deferred();r.context.winplay.call=()=>query.promise;let renders=0;r.context.selected=()=>renders++;
+ vm.runInNewContext(appSource.slice(appSource.indexOf('async function networks()'),appSource.indexOf('async function bluetooth()')),r.context);
+ const operation=r.context.networks();r.node('networkInterface').value='New manual adapter';r.node('networkInterface').listeners.get('change')();query.resolve({ok:true,items:[]});await operation;
+ assert.equal(renders,0);assert.equal(r.node('networkInterface').value,'New manual adapter');
+});
 test('reading waits for pending mode saves and remains pending until all read values are saved',async()=>{
  const r=fixture(),mode=deferred();r.config.wirelessMode='hotspot';r.context.pendingSaves.add(mode.promise);const operation=r.read();await tick();assert.equal(r.reads.length,0);assert.equal(r.context.pendingSaves.size,2);
  r.config.wirelessMode='lan';mode.resolve({ok:true});await operation;assert.equal(r.reads.length,1);assert.equal(r.config.lanSsid,'Public network fixture');assert.equal(r.context.pendingSaves.size,1);
@@ -87,4 +117,22 @@ test('combined network warnings translate individually without changing public n
  const source='Windows未提供移动热点的实际信道，已使用0自动发现；热点尚未开启，已读取Windows保存的热点配置',value=context.resultDetail(source);
  assert.ok(value.includes('Channel 0 uses automatic discovery; '));assert.ok(value.includes('The hotspot is off.'));assert.ok(!/[\u3400-\u9fff]/u.test(value));assert.equal(i18n.translate('公开网络测试/2026','en'),'公开网络测试/2026');
  assert.notEqual(i18n.translate('热点信道必须为0—196，0表示自动','en'),'热点信道必须为0—196，0表示自动');
+});
+
+test('reading credentials preserves automatic selection and never silently pins an adapter',async()=>{
+ for(const mode of ['lan','hotspot']){
+  const r=fixture(mode),key=mode==='lan'?'lanNetworkInterface':'networkInterface';r.config[key]='';
+  await r.read();assert.equal(r.config[key],'');assert.equal(Object.hasOwn(r.saves[0].values,key),false);
+ }
+});
+
+test('network guidance shows useful next steps without requiring a manual adapter',()=>{
+ const r=fixture('hotspot');r.config.networkInterface='';
+ r.context.networkInfo={mode:'hotspot',selection:{ok:false,code:'HOTSPOT_OFF'}};r.context.renderNetwork();
+ assert.equal(r.node('network-status').textContent,'请先开启移动热点');assert.equal(r.node('network-action').dataset.operation,'settings-hotspot');assert.equal(r.node('network-auto').hidden,true);
+ r.config.wirelessMode='lan';r.config.lanNetworkInterface='';r.context.networkInfo={mode:'lan',selection:{ok:true,kind:'ethernet',name:'Ethernet fixture'}};r.context.renderNetwork();
+ assert.match(r.node('network-help').textContent,/同一路由器/);assert.equal(r.node('network-action').hidden,true);
+ r.config.lanNetworkInterface='Offline fixture';r.context.networkInfo.selection={ok:false,code:'LAN_NOT_READY'};r.context.renderNetwork();
+ assert.equal(r.node('network-auto').hidden,false);assert.match(r.node('network-help').textContent,/恢复自动选择/);
+ r.context.networkBusy=true;r.context.renderNetwork();assert.equal(r.node('refresh-network').disabled,true);assert.equal(r.node('network-status').textContent,'正在检测网络…');
 });

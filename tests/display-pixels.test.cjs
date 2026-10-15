@@ -1,6 +1,6 @@
 const test=require('node:test'),assert=require('node:assert/strict');const {physicalDisplay,videoSize,dipVideoBounds}=require('../src/display-settings.cjs');
 test('custom video pixel size stays fixed at Windows DPI factors',()=>{for(const scaleFactor of [1,1.25,1.5,1.75,2]){const d={bounds:{x:0,y:0,width:1920/scaleFactor,height:1080/scaleFactor},scaleFactor};const physical=physicalDisplay(d);assert.equal(physical.width,1920);assert.equal(physical.height,1080);const size=videoSize({width:1280,height:720},physical);assert.deepEqual(size,{width:1280,height:720,fullScreen:false});assert.equal(dipVideoBounds(d,size).width,Math.round(1280/scaleFactor))}});
-test('maximum custom size and fullscreen select full monitor pixels',()=>{const p={width:2560,height:1440};assert.deepEqual(videoSize({fullScreen:true,width:1280,height:720},p),{width:2560,height:1440,fullScreen:true});assert.equal(videoSize({width:2560,height:1440},p).fullScreen,true);assert.throws(()=>videoSize({width:2562,height:720},p),/2560×1440/);assert.throws(()=>videoSize({width:1280,height:1442},p),/2560×1440/)});
+test('maximum custom size and fullscreen select full monitor pixels',()=>{const p={width:2560,height:1440,verified:true};assert.deepEqual(videoSize({fullScreen:true,width:1280,height:720},p),{width:2560,height:1440,fullScreen:true});assert.equal(videoSize({width:2560,height:1440,verified:true},p).fullScreen,true);assert.throws(()=>videoSize({width:2562,height:720},p),/2560×1440/);assert.throws(()=>videoSize({width:1280,height:1442},p),/2560×1440/)});
 test('native monitor rect corrects rounded Electron DIP dimensions before fullscreen negotiation',()=>{
  const display={bounds:{x:0,y:0,width:1707,height:1068},scaleFactor:1.5};
  const monitors=[{x:0,y:0,width:2560,height:1600,workArea:{x:0,y:0,width:2560,height:1528},primary:true}];
@@ -22,13 +22,26 @@ const {presentationSize}=require('../src/display-settings.cjs');
 test('fit mode defaults to bounded logical size without changing negotiated pixels',()=>{
  for(const scaleFactor of [1,1.25,1.5,1.75,2]){
  const display={bounds:{x:0,y:0,width:2560/scaleFactor,height:1440/scaleFactor},workArea:{x:0,y:0,width:2560/scaleFactor,height:1400/scaleFactor},scaleFactor};
- const cfg={width:1280,height:720};const p=presentationSize(cfg,display,{width:2560,height:1440});
+ const cfg={width:1280,height:720};const p=presentationSize(cfg,display,{width:2560,height:1440,verified:true});
  assert.equal(p.strictPixels,false);assert.ok(p.width/scaleFactor<=960);assert.ok(p.height/scaleFactor+40<=display.workArea.height*.8+1);
  assert.equal(cfg.width,1280);assert.ok(Math.abs(p.width/p.height-16/9)<.01);
- const strict=presentationSize({...cfg,strictPixels:true},display,{width:2560,height:1440});assert.equal(strict.width,1280);assert.equal(strict.height,720);
+ const strict=presentationSize({...cfg,strictPixels:true},display,{width:2560,height:1440,verified:true});assert.equal(strict.width,1280);assert.equal(strict.height,720);
  }
 });
 test('native resolution remains exact fullscreen with fitting disabled',()=>{
  const d={bounds:{x:0,y:0,width:1280,height:720},workArea:{x:0,y:0,width:1280,height:680},scaleFactor:2};
- assert.deepEqual(presentationSize({fullScreen:true,strictPixels:false},d,{width:2560,height:1440}),{width:2560,height:1440,fullScreen:true,strictPixels:true});
+ assert.deepEqual(presentationSize({fullScreen:true,strictPixels:false},d,{width:2560,height:1440,verified:true}),{width:2560,height:1440,fullScreen:true,strictPixels:true});
+});
+
+test('unverified monitor dimensions are layout estimates and cannot enable exact pixel modes',()=>{
+ const d={bounds:{x:0,y:0,width:800,height:600},workArea:{x:0,y:0,width:800,height:550},scaleFactor:1.5};
+ const p=physicalDisplay(d);assert.equal(p.verified,false);
+ assert.throws(()=>videoSize({width:1280,height:720,strictPixels:true},p),e=>e.code==='physical-pixels-unavailable');
+ assert.throws(()=>videoSize({fullScreen:true},p),e=>e.code==='physical-pixels-unavailable');
+ assert.deepEqual(videoSize({width:1920,height:1080},p),{width:1920,height:1080,fullScreen:false});
+ assert.equal(videoSize({width:p.width,height:p.height},p).fullScreen,false);
+ const fitted=presentationSize({width:1920,height:1080},d,p);assert.equal(fitted.strictPixels,false);assert.ok(fitted.width/1.5<d.workArea.width);
+ assert.throws(()=>videoSize({width:16386,height:1080},p),/16384/);
+ assert.throws(()=>videoSize({width:1281,height:720},p),/偶数/);
+ assert.throws(()=>videoSize({width:0,height:720},p),/320/);
 });

@@ -2,18 +2,20 @@ const {execFile}=require('node:child_process');
 const {readHotspotConfiguration}=require('./mobile-hotspot-reader.cjs');
 const {listNetworks,resolveNetworkSelection}=require('./network-selection.cjs');
 function decodeOutput(out){if(typeof out==='string')return out;const utf=new TextDecoder('utf-8').decode(out||new Uint8Array());return utf.includes('\ufffd')?new TextDecoder('gb18030').decode(out):utf}
-function parseResult(op,out,error,{interfaceName}={}){const text=decodeOutput(out),pick=(names,block=text)=>block.match(new RegExp('^\\s*(?:'+names+')\\s*:[ \\t]*(.*?)\\r?$','mi'))?.[1]?.trim();const code=error?.code;
+function parseResult(op,out,error,{interfaceName}={}){const text=decodeOutput(out),pick=(names,block=text,preserve=false)=>{const value=block.match(new RegExp('^[ \\t]*(?:'+names+')[ \\t]*:[ \\t]?(.*?)\\r?$','mi'))?.[1];return preserve?value:value?.trim()};const code=error?.code;
  const detail=text.split(/\r?\n/).map(x=>x.trim()).find(x=>/error|denied|not found|错误|失败|找不到|不存在|拒绝|权限/i.test(x)&&!/key content|关键内容|password|passphrase|私钥|证书/i.test(x))||'';
  const failure=(message)=>({ok:false,error:message+(typeof code==='number'?'（系统退出码'+code+'）':code?'（'+String(code)+'）':'')+(detail?'：'+detail.slice(0,250):''),code:code??null});
  if(error)return failure(op==='read-password'?'读取已保存密码失败':'读取当前网络失败');
- if(op==='read-password'){const password=pick('Key Content|关键内容|金鑰內容');return password?{ok:true,password}:failure('该网络没有可读取的已保存共享密码，请手动填写')}
+ // netsh inserts one separator space after the colon. Further whitespace is
+ // part of an SSID, profile/interface name or passphrase and must survive.
+ if(op==='read-password'){const password=pick('Key Content|关键内容|金鑰內容',text,true);return password?{ok:true,password}:failure('该网络没有可读取的已保存共享密码，请手动填写')}
  // Name, SSID, channel and router BSSID must come from the same connection.
  // The first wireless adapter can be disconnected while a later one is live.
  const blocks=text.split(/(?=^[ \t]*(?:Name|名称|名稱)[ \t]*:)/mi);
- const block=blocks.find(item=>!!pick('SSID',item)&&(!interfaceName||String(pick('Name|名称|名稱',item)).toLowerCase()===String(interfaceName).toLowerCase()));
+ const block=blocks.find(item=>!!pick('SSID',item,true)&&(!interfaceName||String(pick('Name|名称|名稱',item,true)).toLowerCase()===String(interfaceName).toLowerCase()));
  if(!block)return failure('未检测到已连接的Wi-Fi；移动热点请在Windows设置中查看');
- const ssid=pick('SSID',block),channel=Number(pick('Channel|频道|信道|通道',block)),matchedInterface=pick('Name|名称|名稱',block);
- const profileName=pick('Profile|配置文件|設定檔|设定档',block);
+ const ssid=pick('SSID',block,true),channel=Number(pick('Channel|频道|信道|通道',block)),matchedInterface=pick('Name|名称|名稱',block,true);
+ const profileName=pick('Profile|配置文件|設定檔|设定档',block,true);
  return {ok:true,ssid,channel,bssid:pick('BSSID',block),...(matchedInterface?{interfaceName:matchedInterface}:{}),...(profileName?{profileName}:{})}
 }
 async function readWlan(op,ssid,options={}){

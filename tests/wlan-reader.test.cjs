@@ -15,3 +15,12 @@ test('start-up reading can target one exact selected Wi-Fi interface without fal
  assert.equal(result.interfaceName,'Wi-Fi 2');assert.equal(result.ssid,'Public second');assert.equal(result.channel,44);assert.equal(result.bssid,'02:00:00:00:00:04');
  assert.equal(parseResult('read-network',output,null,{interfaceName:'Ethernet'}).ok,false);
 });
+test('network credentials retain leading and trailing spaces and literal colons',()=>{
+ for(const [field,password] of [['Key Content','  public:fixture  '],['关键内容','public-fixture  '],['金鑰內容','        ']]){
+  assert.deepEqual(parseResult('read-password',Buffer.from('    '+field+'            : '+password+'\r\n'),null),{ok:true,password});
+ }
+ const ssid=' 公共:网络  ',interfaceName=' Wi-Fi 2 ',profileName=' Public:profile  ';
+ const output=Buffer.from('Name : '+interfaceName+'\r\nSSID : '+ssid+'\r\nProfile : '+profileName+'\r\nChannel : 36\r\n');
+ const value=parseResult('read-network',output,null,{interfaceName});
+ assert.equal(value.ok,true);assert.equal(value.ssid,ssid);assert.equal(value.interfaceName,interfaceName);assert.equal(value.profileName,profileName);assert.equal(value.channel,36);
+});
