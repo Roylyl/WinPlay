@@ -26,9 +26,9 @@
 
 <p align="center"><a href="#快速入门">快速入门</a> · <a href="#主要功能">主要功能</a> · <a href="#显示与窗口">显示与窗口</a> · <a href="#音频与媒体控件">音频与媒体</a> · <a href="#其他平台">其他平台</a> · <a href="#从源码构建">源码构建</a> · <a href="docs/RELEASE-1.2.4.md">1.2.4版本说明</a></p>
 
-<p align="center"><a href="https://github.com/Roylyl/WinPlay/releases/latest">下载安装包</a> · <a href="#快速入门">使用方法</a> · <a href="https://github.com/Roylyl/WinPlay/issues">反馈问题</a></p>
+<p align="center">其他平台：<a href="https://github.com/Roylyl/MacPlay">macOS</a> · <a href="https://github.com/Roylyl/LinuxPlay">Linux</a> · <a href="https://github.com/Roylyl/AndroidPlay">Android</a></p>
 
-<p align="center">其他设备：<a href="https://github.com/Roylyl/MacPlay">MacPlay</a> · <a href="https://github.com/Roylyl/AndroidPlay">AndroidPlay</a></p>
+<p align="center"><a href="https://github.com/Roylyl/WinPlay/releases/latest">下载安装包</a> · <a href="#快速入门">使用方法</a> · <a href="https://github.com/Roylyl/WinPlay/issues">反馈问题</a></p>
 
 WinPlay接续[MacPlay](https://github.com/Roylyl/MacPlay)，把独立CarPlay窗口与分组设置带到Windows，并参考[AndroidPlay](https://github.com/Roylyl/AndroidPlay)的热点连接方案。适合Windows笔记本、平板与桌面电脑，使用Windows移动热点或现有局域网接收iPhone的CarPlay，在电脑上操作导航、播放音乐和使用CarPlay应用。
 
@@ -197,13 +197,13 @@ WinPlay向Windows系统媒体控件同步iPhone上报的播放状态、标题、
 
 ## 其他平台
 
-WinPlay、MacPlay与AndroidPlay是面向不同设备的同系列项目。想在Mac上使用USB直连，或把Android手机、平板、车机用作接收端，可以选择对应项目：
+如果需要在其他设备上使用CarPlay，可以选择对应平台的项目。
 
-| 项目 | 平台 | 适合的使用场景 |
+| 项目 | 适用平台 | 连接方式 |
 | --- | --- | --- |
-| [WinPlay](https://github.com/Roylyl/WinPlay) | Windows10/11x64 | Windows笔记本、平板或桌面显示器，支持移动热点与现有局域网无线接收 |
-| [MacPlay](https://github.com/Roylyl/MacPlay) | macOS14及以上 | Mac用户，支持USB直连与共用Wi-Fi无线连接，提供原生设置与系统媒体控件 |
-| [AndroidPlay](https://github.com/Roylyl/AndroidPlay) | Android9及以上 | Android手机、平板与车机，通过系统热点和蓝牙连接，提供全屏画面与通知栏媒体控制 |
+| [MacPlay](https://github.com/Roylyl/MacPlay) | macOS14及以上 | USB直连或共用局域网无线连接 |
+| [LinuxPlay](https://github.com/Roylyl/LinuxPlay) | Linux桌面（X11/XWayland） | 本机热点或现有局域网无线连接 |
+| [AndroidPlay](https://github.com/Roylyl/AndroidPlay) | Android9及以上 | 系统热点与蓝牙无线连接 |
 
 ## 从源码构建
 
