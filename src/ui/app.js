@@ -93,8 +93,15 @@ async function audioDevices(request=false){
   }catch{toast('Windows未允许麦克风访问，请检查系统隐私设置')}
 }
 async function save(key,value){const request=call('save',{[key]:value});pendingSaves.add(request);let r;try{r=await request}finally{pendingSaves.delete(request)}if(!r.ok)return r;config[key]=value;if(key==='theme')theme(value==='dark'||value==='system'&&(await winplay.call('state')).dark);if(key==='language')applyLanguage();return r}
-function showPage(page){document.querySelectorAll('.nav').forEach(button=>button.classList.toggle('active',button.dataset.page===page));document.querySelectorAll('.page').forEach(node=>node.hidden=node.id!==page);$('receiver-footer').hidden=page==='about'}
+function showPage(page){document.querySelectorAll('.nav').forEach(button=>button.classList.toggle('active',button.dataset.page===page));document.querySelectorAll('.page').forEach(node=>node.hidden=node.id!==page);$('receiver-footer').hidden=page==='about'||page==='donation'}
 document.querySelectorAll('.nav').forEach(button=>button.addEventListener('click',()=>showPage(button.dataset.page)));
+const donationMethods={wechat:'微信支付',alipay:'支付宝',alipayhk:'AlipayHK'};
+document.querySelectorAll('.donation-code').forEach(button=>button.addEventListener('click',()=>{
+  const method=button.dataset.method;if(!Object.hasOwn(donationMethods,method))return;
+  text('donation-title',donationMethods[method]);const img=$('donation-image');img.src='donation/'+method+'.jpg';img.dataset.i18nAlt=donationMethods[method]+'收款码';img.alt=t(img.dataset.i18nAlt);$('donation-dialog').showModal();
+}));
+$('donation-close').onclick=()=>$('donation-dialog').close();
+$('donation-paypal').onclick=()=>call('open-donation-paypal');
 function format(ms){const seconds=Math.max(0,Math.floor((ms||0)/1000));return String(Math.floor(seconds/60)).padStart(2,'0')+':'+String(seconds%60).padStart(2,'0')}
 function metadata(s,artChanged){
   playing=s;if(artChanged){if(artUrl)URL.revokeObjectURL(artUrl);artUrl=s.artwork?.length?URL.createObjectURL(new Blob([new Uint8Array(s.artwork)],{type:s.artwork[0]===137?'image/png':'image/jpeg'})):'';$('artwork').hidden=!artUrl;if(artUrl)$('artwork').src=artUrl;else $('artwork').removeAttribute('src')}

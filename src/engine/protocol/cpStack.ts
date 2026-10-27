@@ -322,6 +322,9 @@ export class CpStack extends EventEmitter {
       this._sessionSock.delete(session)
       this._teardown(session)
       this._notifySessionEnded(session)
+      // Also release a connection that closed before device acceptance/RECORD.
+      // It owns a transport slot even when no media session was established.
+      this.emit('connection-closed')
     })
   }
 
@@ -396,6 +399,13 @@ export class CpStack extends EventEmitter {
   /** The connection's stable pair-verify controller id (the CP device identity). */
   get activeControllerId(): string | null {
     return this._liveSession?.pairVerify.controllerId ?? null
+  }
+
+  /** Confirm network handoff only after authenticated, accepted session RECORD. */
+  get hasVerifiedSession(): boolean {
+    const session = this._liveSession
+    return !this._closing && !!session && !session.closed && !session.ended &&
+      !session.endRequested && session.setupComplete && session.deviceAccepted && session.pairVerify.verified
   }
 
   /** Sets the level of every stream of this audioType in Windows. */
@@ -782,7 +792,7 @@ export class CpStack extends EventEmitter {
   private _openEventChannel(session: CpSession): Promise<number> {
     return new Promise((resolve, reject) => {
       const server = net.createServer((s) => {
-        if (this._closing || session.ended || session.endRequested) { s.destroy(); return }
+        if (this._closing || session.closed || session.ended || session.endRequested) { s.destroy(); return }
         console.log('[cpStack] event channel connected')
         // The event connection is encrypted from the first byte with Events keys
         // derived from the pair-verify secret. We use it to push HID (touch) reports.
@@ -804,7 +814,7 @@ export class CpStack extends EventEmitter {
         let enc: Buffer = Buffer.alloc(0)
         let plain: Buffer = Buffer.alloc(0)
         s.on('data', (chunk: Buffer) => {
-          if (session.eventSock !== s || s.destroyed) return
+          if (session.closed || session.ended || session.endRequested || session.eventSock !== s || s.destroyed) return
           const cipher = session.eventCipher
           if (!cipher) return
           enc = Buffer.concat([enc, chunk])

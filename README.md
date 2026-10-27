@@ -5,7 +5,7 @@
 <p align="center">把iPhone的CarPlay带到Windows，支持无线连接、独立画面窗口、音频播放与鼠标/触控板操作。</p>
 
 <p align="center">
-  <a href="package.json"><img src="https://img.shields.io/badge/source-1.2.4-2563eb?style=flat-square" alt="源码版本1.2.4"></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/source-1.2.5-2563eb?style=flat-square" alt="源码版本1.2.5"></a>
   <a href="https://github.com/Roylyl/WinPlay/releases/latest"><img src="https://img.shields.io/github/v/release/Roylyl/WinPlay?style=flat-square&amp;label=release&amp;color=2563eb" alt="GitHub最新正式发行版"></a>
   <a href="#使用条件"><img src="https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-555555?style=flat-square" alt="Windows10/11x64"></a>
   <a href="#无线连接"><img src="https://img.shields.io/badge/CarPlay-wireless-2563eb?style=flat-square" alt="无线CarPlay"></a>
@@ -24,7 +24,7 @@
   <a href="https://github.com/Roylyl/WinPlay/commits"><img src="https://img.shields.io/github/last-commit/Roylyl/WinPlay?style=flat-square&amp;label=last%20commit&amp;color=555555" alt="最近提交时间"></a>
 </p>
 
-<p align="center"><a href="#快速入门">快速入门</a> · <a href="#主要功能">主要功能</a> · <a href="#显示与窗口">显示与窗口</a> · <a href="#音频与媒体控件">音频与媒体</a> · <a href="#其他平台">其他平台</a> · <a href="#从源码构建">源码构建</a> · <a href="docs/RELEASE-1.2.4.md">1.2.4版本说明</a></p>
+<p align="center"><a href="#快速入门">快速入门</a> · <a href="#主要功能">主要功能</a> · <a href="#显示与窗口">显示与窗口</a> · <a href="#音频与媒体控件">音频与媒体</a> · <a href="#其他平台">其他平台</a> · <a href="#从源码构建">源码构建</a> · <a href="docs/RELEASE-1.2.5.md">1.2.5版本说明</a> · <a href="#捐赠">捐赠</a></p>
 
 <p align="center">其他平台：<a href="https://github.com/Roylyl/MacPlay">macOS</a> · <a href="https://github.com/Roylyl/LinuxPlay">Linux</a> · <a href="https://github.com/Roylyl/AndroidPlay">Android</a></p>
 
@@ -47,7 +47,7 @@ WinPlay接续[MacPlay](https://github.com/Roylyl/MacPlay)，把独立CarPlay窗�
 
 ### 安装
 
-在[GitHubReleases](https://github.com/Roylyl/WinPlay/releases)下载安装包，按向导完成安装；1.2.4对应`WinPlay-1.2.4-Setup-x64.exe`。单个EXE内置运行组件，可离线安装；开发者也可[从源码构建](#从源码构建)。
+在[GitHubReleases](https://github.com/Roylyl/WinPlay/releases)下载安装包，按向导完成安装；1.2.5对应`WinPlay-1.2.5-Setup-x64.exe`。单个EXE内置运行组件，可离线安装；开发者也可[从源码构建](#从源码构建)。
 
 首次默认1280×720、60fps、可等比例缩放的窗口、系统默认输入/输出设备、100%音量与跟随系统语言。当前安装包未做发行代码签名，Windows可能显示安全提示。
 
@@ -94,7 +94,7 @@ Wi-Fi共享密码需为8—63位，企业802.1X、网页登录与访客网络的
 
 ### 界面与语言
 
-主窗口分为连接、显示、音频和关于四页，采用与MacPlay对应的左侧导航和右侧分组卡片。CarPlay画面单独显示，设置不会叠加在画面上。
+主窗口侧栏包含连接、显示、音频、关于和捐赠，采用与MacPlay对应的左侧导航和右侧分组卡片。CarPlay画面单独显示，设置不会叠加在画面上。
 
 连接、显示、音频页保留固定底部接收栏。接收未启动时显示“启动接收”；运行期间提供“停止接收”“显示画面”和“应用并重新连接”。关于页集中展示版本、更新、日志与认证，最近日志和认证区默认折叠。
 
@@ -222,7 +222,7 @@ npm start
 npm run dist
 ~~~
 
-产物为`dist/WinPlay-1.2.4-Setup-x64.exe`。[导出脚本](scripts/export-installer.ps1)会将安装包复制到Windows桌面，再通过官方卸载程序卸载已有WinPlay并保留用户数据。
+产物为`dist/WinPlay-1.2.5-Setup-x64.exe`。[导出脚本](scripts/export-installer.ps1)会将安装包复制到Windows桌面，再通过官方卸载程序卸载已有WinPlay并保留用户数据。
 
 | 目录 | 内容 |
 | --- | --- |
@@ -239,3 +239,22 @@ npm run dist
 无线引导参考[AndroidPlay](https://github.com/Roylyl/AndroidPlay)，局域网方案与网络协议复用[MacPlay](https://github.com/Roylyl/MacPlay)，保留[LIVI](https://github.com/f-io/LIVI)、LasseHeitgres及贡献者和[DiPlay](https://github.com/shihabal3amri/DiPlay)来源声明。项目沿用GPL-3.0-or-later，见[LICENSE](LICENSE)、[NOTICE](NOTICE)与[第三方声明](vendor/THIRD-PARTY-NOTICES.txt)。
 
 WinPlay是独立衍生项目，不代表Apple或上游作者，不声称获得MFi认证。第三方组件、认证证书、私钥和商标继续适用各自权利条件。分发修改版时应保留声明，并提供适用许可要求的对应源码与构建资料。
+
+## 捐赠
+
+如果WinPlay对你有帮助，欢迎支持项目的持续维护。应用侧栏的“捐赠”页也提供以下方式，收款码可点击放大。
+
+<table>
+  <tr>
+    <th>微信支付</th>
+    <th>支付宝</th>
+    <th>AlipayHK</th>
+  </tr>
+  <tr>
+    <td align="center"><a href="src/ui/donation/wechat.jpg"><img src="src/ui/donation/wechat.jpg" width="200" alt="微信支付收款码"></a></td>
+    <td align="center"><a href="src/ui/donation/alipay.jpg"><img src="src/ui/donation/alipay.jpg" width="200" alt="支付宝收款码"></a></td>
+    <td align="center"><a href="src/ui/donation/alipayhk.jpg"><img src="src/ui/donation/alipayhk.jpg" width="200" alt="AlipayHK收款码"></a></td>
+  </tr>
+</table>
+
+<a href="https://paypal.me/RoyRoylyl"><img src="https://img.shields.io/badge/PayPal-RoyRoylyl-0070ba?style=flat-square" alt="通过PayPal捐赠"></a>

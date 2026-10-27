@@ -9,7 +9,7 @@ type RecoveryOptions = {
  onWait?:() => void
 }
 
-/** One bounded recovery before iPhone opens its CarPlay control connection. */
+/** One bounded recovery before iPhone confirms an authenticated CarPlay session. */
 export class HandoffRecovery {
  private started = false
  private finished = false

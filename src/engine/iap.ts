@@ -42,26 +42,38 @@ export class IapLink extends EventEmitter {
  close(){this.state='dead';clearInterval(this.timer);this.pending=[];this.queue=[];this.stream.destroy()}
 }
 export type Handoff={ssid:string;password:string;channel:number;btMac:string;apMac:string;host:string;port:number;pk:string;serial:string}
+type AccessoryOptions={bootstrap?:boolean;canStart?:()=>boolean}
+export function wirelessCarPlayAvailable(p:Map<number,Buffer>):boolean {
+ try {const group=p.get(1);if(!group)return false;const available=fields(group).get(0);return available?.length===1&&available[0]===1}catch{return false}
+}
 const text=(b?:Buffer)=>b?.toString('utf8').replace(/\0.*$/s,'')||''
 export function identification(cfg:Handoff){
  const sent=[0xaa01,0xaa03,0x5000,0x5002,0x5003,0x5200,0x5203,0xae00,0xae02,0x4157,0x4159,0x4154,0x4156,0x4301,0x5703]
  const received=[0xaa00,0xaa02,0xaa04,0xaa05,0xea00,0xea01,0x5001,0x5201,0x5202,0xae01,0x4158,0x4155,0x4300,0x4e0d,0x4e0e,0x5702]
- const p=[...['WinPlay','WinPlay','Roylyl',cfg.serial,'1.2.4','1.0'].map((s,i)=>param(i,str(s))),param(6,Buffer.concat(sent.map(u16))),param(7,Buffer.concat(received.map(u16))),param(8,Buffer.from([0])),param(9,u16(20)),param(10,Buffer.concat([param(0,Buffer.from([1])),param(1,str('io.github.roylyl.winplay')),param(2,Buffer.from([0]))])),param(12,str('en')),param(13,str('en'))]
+ const p=[...['WinPlay','WinPlay','Roylyl',cfg.serial,'1.2.5','1.0'].map((s,i)=>param(i,str(s))),param(6,Buffer.concat(sent.map(u16))),param(7,Buffer.concat(received.map(u16))),param(8,Buffer.from([0])),param(9,u16(20)),param(10,Buffer.concat([param(0,Buffer.from([1])),param(1,str('io.github.roylyl.winplay')),param(2,Buffer.from([0]))])),param(12,str('en')),param(13,str('en'))]
  p.push(param(17,Buffer.concat([param(0,u16(0)),param(1,str('blue')),param(2),param(3,Buffer.from(cfg.btMac.replaceAll(':',''),'hex')),param(4,str('blue')),param(5)])),param(24,Buffer.concat([param(0,u16(1)),param(1,str(cfg.ssid)),param(2),param(3,u16(1)),param(4),param(5)])))
  return csm(0x1d01,p)
 }
 export class Accessory extends EventEmitter {
  authenticated=false;private stage='identify';private preWifi=0;private postWifi=0;private transportNotified=false;private deadline:NodeJS.Timeout
- constructor(public link:IapLink,private signer:MfiSigner,private cfg:Handoff){super();link.on('csm',(id,p)=>{this.receive(id,p).catch((e:Error)=>this.emit('failed',e.message||'iAP2认证或消息处理失败'))});link.on('failed',s=>this.emit('failed',s));this.deadline=setTimeout(()=>this.emit('failed','配件识别或认证超时'),45000)}
+ private available=false;private startSent=false;private closed=false
+ constructor(public link:IapLink,private signer:MfiSigner,private cfg:Handoff,private options:AccessoryOptions={}){super();link.on('csm',(id,p)=>{this.receive(id,p).catch((e:Error)=>{if(!this.closed)this.emit('failed',e.message||'iAP2认证或消息处理失败')})});link.on('failed',s=>{if(!this.closed)this.emit('failed',s)});link.on('transport-closed',()=>this.close());this.deadline=setTimeout(()=>this.emit('failed','配件识别或认证超时'),45000)}
  private send(id:number,p:Buffer[]=[]){this.link.send(csm(id,p))}
  private wifi(){const count=this.transportNotified?this.postWifi:this.preWifi;if(count>=3)return;if(this.transportNotified)this.postWifi++;else this.preWifi++;this.send(0x5703,[param(1,str(this.cfg.ssid)),param(2,str(this.cfg.password)),param(3,Buffer.from([2])),param(4,Buffer.from([this.cfg.channel]))])}
- async startCarPlay(){if(!this.authenticated)return;const c=this.cfg;const group=[param(0,str(c.ssid)),param(1,str(c.password)),param(2,Buffer.from([c.channel])),param(3,str(c.host)),param(4,Buffer.from([2]))];this.send(0x4301,[param(1,Buffer.concat(group)),param(2,u32(c.port)),param(3,str(c.apMac)),param(4,str(c.pk)),param(5,str('950.7.1'))]);this.emit('negotiation')}
+ async startCarPlay(retry=false){
+  // A tunnel carries controls and metadata for the existing network session.
+  // Only the bootstrap link may start it, once per availability negotiation.
+  if(this.closed||!this.authenticated||!this.available||this.options.bootstrap===false||this.options.canStart?.()===false||this.startSent&&!retry)return false
+  const c=this.cfg,group=[param(0,str(c.ssid)),param(1,str(c.password)),param(2,Buffer.from([c.channel])),param(3,str(c.host)),param(4,Buffer.from([2]))]
+  this.send(0x4301,[param(1,Buffer.concat(group)),param(2,u32(c.port)),param(3,str(c.apMac)),param(4,str(c.pk)),param(5,str('950.7.1'))]);this.startSent=true;this.emit('negotiation');return true
+ }
  private async receive(id:number,p:Map<number,Buffer>){
+  if(this.closed)return
   if(id===0x1d00){this.link.send(identification(this.cfg));return}
   if(id===0x1d03){this.emit('failed','iPhone拒绝配件识别参数：'+[...p.keys()].join(','));return}
   if(id===0x1d02){this.stage='authenticate';this.emit('status','iPhone已接受配件识别');return}
-  if(id===0xaa00&&this.stage==='authenticate'){this.send(0xaa01,[param(0,await this.signer.certificate())]);return}
-  if(id===0xaa02&&this.stage==='authenticate'){const challenge=p.get(0);if(!challenge||challenge.length!==32)throw new Error('挑战长度错误');this.send(0xaa03,[param(0,await this.signer.sign(challenge))]);return}
+  if(id===0xaa00&&this.stage==='authenticate'){const certificate=await this.signer.certificate();if(!this.closed)this.send(0xaa01,[param(0,certificate)]);return}
+  if(id===0xaa02&&this.stage==='authenticate'){const challenge=p.get(0);if(!challenge||challenge.length!==32)throw new Error('挑战长度错误');const signature=await this.signer.sign(challenge);if(!this.closed)this.send(0xaa03,[param(0,signature)]);return}
   if(id===0xaa04){this.emit('failed','iPhone拒绝MFi认证材料');return}
   if(id===0xaa05&&this.stage==='authenticate'){this.authenticated=true;this.stage='ready';clearTimeout(this.deadline);this.emit('status','MFi认证已通过，等待CarPlay请求');
    this.send(0x5000,[param(0,Buffer.concat([0,1,4,6,12,26].map(n=>param(n)))),param(1,Buffer.concat([0,1,7,12,13,16].map(n=>param(n))))]);
@@ -69,10 +81,10 @@ export class Accessory extends EventEmitter {
   if(!this.authenticated)return
   if(id===0x5702)this.wifi()
   if(id===0x4e0e){this.transportNotified=true;this.wifi()}
-  if(id===0x4300)await this.startCarPlay()
+  if(id===0x4300){this.available=wirelessCarPlayAvailable(p);this.emit('availability',this.available);if(this.available)await this.startCarPlay()}
   if(id===0x5001)this.emit('now-playing',p)
  }
  seek(ms:number){this.send(0x5003,[param(0,u32(ms))])}
- close(){clearTimeout(this.deadline);this.link.close()}
+ close(){if(this.closed)return;this.closed=true;clearTimeout(this.deadline);this.link.close();this.emit('closed')}
 }
 export {text as iapText}

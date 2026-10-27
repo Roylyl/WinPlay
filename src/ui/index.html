@@ -16,8 +16,9 @@
     <button class="nav" data-page="display"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg><span data-i18n="显示">显示</span></button>
     <button class="nav" data-page="audio"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 4V5L7 9zM16 8a6 6 0 0 1 0 8M19 5a10 10 0 0 1 0 14"/></svg><span data-i18n="音频">音频</span></button>
     <button class="nav" data-page="about"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v1"/></svg><span data-i18n="关于">关于</span></button>
+    <button class="nav" data-page="donation"><svg viewBox="0 0 24 24"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8z"/></svg><span data-i18n="捐赠">捐赠</span></button>
   </nav>
-  <div class="side-footer"><span class="dot" id="side-dot"></span><span id="side-status" data-i18n="未连接">未连接</span><small><span data-i18n="版本">版本</span><span id="version">1.2.4</span></small></div>
+  <div class="side-footer"><span class="dot" id="side-dot"></span><span id="side-status" data-i18n="未连接">未连接</span><small><span data-i18n="版本">版本</span><span id="version">1.2.5</span></small></div>
 </aside>
 <main>
 <div class="settings-content">
@@ -100,7 +101,7 @@
   <header><h1 data-i18n="关于">关于</h1></header>
   <h2 class="section-title" data-i18n="关于WinPlay">关于WinPlay</h2>
   <div class="card">
-    <div class="setting-row"><span data-i18n="版本">版本</span><span id="about-version" class="value">1.2.4</span></div>
+    <div class="setting-row"><span data-i18n="版本">版本</span><span id="about-version" class="value">1.2.5</span></div>
     <div class="setting-row"><span data-i18n="运行架构">运行架构</span><span id="architecture" class="value">x64</span></div>
     <div class="setting-row"><span data-i18n="开源许可">开源许可</span><span class="value">GPL-3.0-or-later</span></div>
     <div class="setting-row"><span data-i18n="项目主页">项目主页</span><button id="project-home" class="link-button">Roylyl/WinPlay ↗</button></div>
@@ -116,9 +117,24 @@
   <div class="card"><div class="actions"><button id="open-log" data-i18n="打开日志" disabled>打开日志</button><button id="export-diagnostics" data-i18n="导出日志">导出日志</button></div><details class="disclosure" id="recent-logs"><summary data-i18n="最近日志">最近日志</summary><pre id="logs">暂无日志</pre></details><p id="log-result" class="caption result" hidden></p></div>
   <div class="card"><details class="disclosure" id="authentication"><summary data-i18n="认证文件">认证文件</summary><div class="setting-row"><span data-i18n="状态">状态</span><span id="auth-status" class="value" data-i18n="缺少文件">缺少文件</span></div><div class="actions"><button id="import-auth" data-i18n="导入认证文件">导入认证文件</button><button id="open-auth" data-i18n="打开认证目录">打开认证目录</button><button id="refresh-status" data-i18n="刷新状态">刷新状态</button></div><p id="auth-result" class="caption result" hidden></p><p class="caption" data-i18n="安装包内置认证文件，本机导入的配套文件优先使用。">安装包内置认证文件，本机导入的配套文件优先使用。</p></details></div>
 </section>
+<section id="donation" class="page" hidden>
+  <header><h1 data-i18n="捐赠">捐赠</h1></header>
+  <h2 class="section-title" data-i18n="支持WinPlay">支持WinPlay</h2>
+  <div class="card donation-card">
+    <p class="caption" data-i18n="感谢你支持WinPlay的持续开发。">感谢你支持WinPlay的持续开发。</p>
+    <div class="donation-methods">
+      <button class="donation-code" data-method="wechat" data-i18n-aria="微信支付，点击放大" aria-haspopup="dialog" aria-controls="donation-dialog"><span data-i18n="微信支付">微信支付</span><img src="donation/wechat.jpg" alt="微信支付收款码" data-i18n-alt="微信支付收款码"><span class="caption" data-i18n="点击放大">点击放大</span></button>
+      <button class="donation-code" data-method="alipay" data-i18n-aria="支付宝，点击放大" aria-haspopup="dialog" aria-controls="donation-dialog"><span data-i18n="支付宝">支付宝</span><img src="donation/alipay.jpg" alt="支付宝收款码" data-i18n-alt="支付宝收款码"><span class="caption" data-i18n="点击放大">点击放大</span></button>
+      <button class="donation-code" data-method="alipayhk" data-i18n-aria="AlipayHK，点击放大" aria-haspopup="dialog" aria-controls="donation-dialog"><span>AlipayHK</span><img src="donation/alipayhk.jpg" alt="AlipayHK收款码" data-i18n-alt="AlipayHK收款码"><span class="caption" data-i18n="点击放大">点击放大</span></button>
+    </div>
+  </div>
+  <h2 class="section-title">PayPal</h2>
+  <div class="card"><div class="setting-row donation-paypal"><span>RoyRoylyl</span><button id="donation-paypal" class="primary" data-i18n="通过PayPal捐赠">通过PayPal捐赠</button></div></div>
+</section>
 </div>
 <footer class="app-footer" id="receiver-footer"><div id="running-actions" class="actions" hidden><button id="stop" data-i18n="停止接收">停止接收</button><button id="show-video" data-i18n="显示画面" disabled>显示画面</button></div><button id="start" class="primary" data-i18n="启动接收">启动接收</button></footer>
 </main>
+<dialog id="donation-dialog" aria-labelledby="donation-title"><div class="donation-modal"><div class="row"><h2 id="donation-title"></h2><button id="donation-close" data-i18n="关闭">关闭</button></div><img id="donation-image" alt=""></div></dialog>
 <div id="toast" role="status" hidden></div><audio id="system-audio"></audio>
 <script src="i18n.js"></script><script src="audio-timeline.js"></script><script src="audio.js"></script><script src="app.js"></script>
 </body>

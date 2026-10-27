@@ -22,7 +22,7 @@ const send=(msg:any)=>{if(process.connected)process.send?.(msg)}
 // The release exposes only our explicit status messages and numeric metrics.
 console.log=()=>{};console.warn=()=>{};console.error=()=>{}
 let server:net.Server|undefined,bonjour:Discovery|undefined,accessory:Accessory|undefined,bluetooth:ReturnType<typeof spawn>|undefined,active:CpStack|undefined,guard:FrameRateFallback|undefined
-const sessions=new Set<CpStack>();let stopRequested=false,hadVideo=false,receivedFrames=0,currentFps=60,settings:any,ticker:NodeJS.Timeout|undefined,videoDeadline:NodeJS.Timeout|undefined,controlConnections=0
+const sessions=new Set<CpStack>(),controlSockets=new Set<net.Socket>();let stopRequested=false,hadVideo=false,receivedFrames=0,currentFps=60,settings:any,ticker:NodeJS.Timeout|undefined,videoDeadline:NodeJS.Timeout|undefined,controlConnections=0,networkConfirmed=false
 let videoGate:VideoFrameGate|undefined,videoOwner:CpStack|undefined
 let videoRecovery:NodeJS.Timeout|undefined,networkDeadline:NodeJS.Timeout|undefined,handoffRecovery:HandoffRecovery|undefined
 let playing:NowPlaying|undefined
@@ -36,60 +36,75 @@ function nativeList(){return new Promise<any>((resolve,reject)=>{const p=spawn(p
 function network(cfg:any){const nics=os.networkInterfaces(),selected=nics[cfg.networkInterface];if(!selected)throw new Error('请选择接收端网络接口：移动热点虚拟接口或现有局域网Wi-Fi接口')
  return receiverNetwork(selected)
 }
-async function begin(cfg:any){attemptStarted=Date.now();settings=cfg;currentFps=cfg.fps;stopRequested=false;bluetoothReleased=false;controlConnections=0;diagnostic('接收进程启动',{mode:cfg.wirelessMode,requestedFps:cfg.fps,width:cfg.width,height:cfg.height});const signer=new LocalSigner(path.join(dataDir,'authentication'));const identity=loadOrCreateIdentity();const nic=network(cfg);diagnostic('网络参数选定',{family:nic.family,alternateFamily:nic.alternateFamily||'none',ipv6ScopeValid:!!nic.scope,channel:cfg.channel,accessPointProvided:!!cfg.accessPointMac});const bt=await nativeList();diagnostic('蓝牙枚举完成',{pairedDevices:bt.devices.length,selectedPresent:bt.devices.some((d:any)=>d.address===cfg.targetBluetooth)})
+async function begin(cfg:any){attemptStarted=Date.now();settings=cfg;currentFps=cfg.fps;stopRequested=false;bluetoothReleased=false;controlConnections=0;networkConfirmed=false;let controlSequence=0;diagnostic('接收进程启动',{mode:cfg.wirelessMode,requestedFps:cfg.fps,width:cfg.width,height:cfg.height});const signer=new LocalSigner(path.join(dataDir,'authentication'));const identity=loadOrCreateIdentity();const nic=network(cfg);diagnostic('网络参数选定',{family:nic.family,alternateFamily:nic.alternateFamily||'none',ipv6ScopeValid:!!nic.scope,channel:cfg.channel,accessPointProvided:!!cfg.accessPointMac});const bt=await nativeList();diagnostic('蓝牙枚举完成',{pairedDevices:bt.devices.length,selectedPresent:bt.devices.some((d:any)=>d.address===cfg.targetBluetooth)})
  videoGate=new VideoFrameGate({send:frame=>send({type:'video-frame',...frame}),pause:paused=>(active||videoOwner)?.setMainVideoBackpressure(paused),requestKey:()=>(active||videoOwner)?.forceMainKeyframe()})
  if(stopRequested)return
  if(!bt.devices.some((d:any)=>d.address===cfg.targetBluetooth))throw new Error('请选择已在Windows中配对的iPhone')
  const networkWaitDetail=cfg.wirelessMode==='lan'?'蓝牙认证已通过，但尚未收到iPhone的网络连接。请确认两端使用可互访的同一网络，允许WinPlay安装目录中resources\\node\\node.exe通过Windows防火墙，并检查路由器的访客网络或客户端隔离。可在iPhone上重新加入Wi-Fi，或改用本机移动热点。':'请确认iPhone已加入Windows移动热点，并检查当前网络接口和防火墙。'
- const armVideoDeadline=()=>{if(videoDeadline)clearTimeout(videoDeadline);videoDeadline=setTimeout(()=>{if(!hadVideo&&!stopRequested){status(controlConnections?'CarPlay视频连接超时':'iPhone网络连接超时',controlConnections?'请检查当前无线模式的网络接口和防火墙':networkWaitDetail);shutdown()}},45000)}
+ const armVideoDeadline=()=>{if(videoDeadline)clearTimeout(videoDeadline);videoDeadline=setTimeout(()=>{if(!hadVideo&&!stopRequested){status(networkConfirmed?'CarPlay视频连接超时':'iPhone网络连接超时',networkConfirmed?'请检查当前无线模式的网络接口和防火墙':networkWaitDetail);shutdown()}},45000)}
  const deviceId=accessoryDeviceId(identity.pubRaw)
  const icons=[256,512].map(size=>({widthPixels:size,heightPixels:size,data:fs.readFileSync(path.join(process.env.WINPLAY_RESOURCES!,'icons',`winplay-${size}.png`))}))
  const config={networkScope:nic.scope,deviceName:'WinPlay',deviceId,btMac:bt.adapter,sourceVersion:'950.7.1',hevc:false,h264:true,main:{widthPixels:cfg.width,heightPixels:cfg.height,fps:cfg.fps,primaryInputDevice:1,viewArea:{top:0,bottom:0,left:0,right:0},safeArea:{top:0,bottom:0,left:0,right:0},safeAreaDrawOutside:true},port:17000,entertainmentSampleRate:48000 as const,audioVolume:(type:number)=>type===2?settings.callVolume:type===1?1:settings.mediaVolume,audioDevice:()=>settings.outputDevice||undefined,audioInputDevice:()=>settings.inputDevice||undefined,mfi:signer,oemLabel:'WinPlay',icons,rightHandDrive:false}
- const applyGuard=(fps:number)=>{config.main.fps=fps;currentFps=fps;guard=new FrameRateFallback(fps,next=>{if(stopRequested||hadVideo)return;for(const stack of sessions)stack.stop();sessions.clear();active=undefined;applyGuard(next);guard?.negotiationStarted();if(next<=60)armVideoDeadline();send({type:'requested-fps',requested:settings.fps,attempt:next});accessory?.startCarPlay().catch(error=>{if(!stopRequested){diagnostic('帧率回退参数发送失败',errorInfo(error));status('帧率回退失败，请重新启动接收');shutdown()}})})};applyGuard(cfg.fps)
- server=net.createServer(socket=>{if(stopRequested||sessions.size>=8){socket.destroy();return}controlConnections++;handoffRecovery?.networkConnected();if(networkDeadline){clearTimeout(networkDeadline);networkDeadline=undefined}if(controlConnections===1&&currentFps<=60)armVideoDeadline();status('网络控制连接已到达','连接数：'+controlConnections);const stack=new CpStack({...config,main:{...config.main}});sessions.add(stack);stack.setAudioActive(true)
-  const connectionId=controlConnections;diagnostic('网络控制连接到达',{connection:connectionId,peerFamily:socket.remoteFamily,localPort:socket.localPort,peerPort:socket.remotePort});socket.on('error',error=>diagnostic('网络控制套接字错误',{connection:connectionId,...errorInfo(error)}));socket.on('close',hadError=>diagnostic('网络控制套接字关闭',{connection:connectionId,hadError,videoReceived:hadVideo}));
-  stack.on('session-active',()=>{if(active&&active!==stack){diagnostic('拒绝额外会话',{connection:connectionId});stack.stop();return}active=stack;diagnostic('CarPlay会话建立',{connection:connectionId});status('CarPlay会话已建立，等待视频');guard?.negotiationStarted()})
+ let activeLink:IapLink,bootstrapAccessory:Accessory|undefined;const accessories=new Set<Accessory>(),openLinks=new Set<IapLink>()
+ const applyGuard=(fps:number)=>{config.main.fps=fps;currentFps=fps;guard=new FrameRateFallback(fps,next=>{
+  if(stopRequested||hadVideo)return
+  if(!bootstrapAccessory?.authenticated||!openLinks.has(bootstrapAccessory.link)){status('帧率回退失败，请重新启动接收','蓝牙交接通道已关闭，请选择60fps后重新启动接收。');shutdown();return}
+  active=undefined;videoOwner=undefined;accessory=bootstrapAccessory;activeLink=bootstrapAccessory.link;networkConfirmed=false
+  for(const stack of [...sessions])stack.stop();sessions.clear();applyGuard(next);guard?.negotiationStarted();if(next<=60)armVideoDeadline();send({type:'requested-fps',requested:settings.fps,attempt:next})
+  bootstrapAccessory.startCarPlay(true).then(sent=>{if(!sent&&!stopRequested){status('帧率回退失败，请重新启动接收');shutdown()}}).catch(error=>{if(!stopRequested){diagnostic('帧率回退参数发送失败',errorInfo(error));status('帧率回退失败，请重新启动接收');shutdown()}})
+ })};applyGuard(cfg.fps)
+ server=net.createServer(socket=>{if(stopRequested||sessions.size>=8){socket.destroy();return}controlSockets.add(socket);controlConnections=controlSockets.size;if(!networkConfirmed)status('网络控制连接已到达','连接数：'+controlConnections);const stack=new CpStack({...config,main:{...config.main}});sessions.add(stack);stack.setAudioActive(true)
+  const connectionId=++controlSequence;diagnostic('网络控制连接到达',{connection:connectionId,peerFamily:socket.remoteFamily,localPort:socket.localPort,peerPort:socket.remotePort});socket.on('error',error=>diagnostic('网络控制套接字错误',{connection:connectionId,...errorInfo(error)}));socket.on('close',hadError=>diagnostic('网络控制套接字关闭',{connection:connectionId,hadError,videoReceived:hadVideo}));
+  stack.on('session-active',()=>{
+   if(stopRequested||!sessions.has(stack)||!stack.hasVerifiedSession)return
+   if(active&&active!==stack){diagnostic('拒绝额外会话',{connection:connectionId});stack.stop();return}
+   const first=active!==stack;active=stack
+   // TCP probes do not establish a session. Suppress bootstrap only after
+   // pair-verify, target-device selection and the authenticated RECORD request.
+   networkConfirmed=true;handoffRecovery?.networkConnected();if(networkDeadline){clearTimeout(networkDeadline);networkDeadline=undefined}if(first&&currentFps<=60)armVideoDeadline()
+   diagnostic('CarPlay会话建立',{connection:connectionId});status('CarPlay会话已建立，等待视频');guard?.negotiationStarted()
+  })
   stack.on('video-config',(data:Buffer)=>{if(stopRequested||active&&active!==stack)return;videoOwner=stack;const generation=videoGate?.configure(data);diagnostic('视频配置到达',{connection:connectionId,generation,configBytes:data.length,requestedWidth:cfg.width,requestedHeight:cfg.height});status('已收到视频配置');send({type:'video-config',data,generation,width:cfg.width,height:cfg.height})})
   stack.on('video-frame',(data:Buffer)=>{if(stopRequested||active&&active!==stack)return;videoOwner=stack;receivedFrames++;totalVideoFrames++;if(videoRecovery){clearTimeout(videoRecovery);videoRecovery=undefined;diagnostic('视频通道恢复',{connection:connectionId});status('正在接收CarPlay视频')}if(!hadVideo){hadVideo=true;diagnostic('视频首帧到达',{connection:connectionId,frameBytes:data.length});guard?.videoStarted();if(videoDeadline)clearTimeout(videoDeadline);status('正在接收CarPlay视频');send({type:'connected'})}videoGate?.push(data,Number(process.hrtime.bigint()/1000n))})
   stack.on('video-ended',()=>{if(hadVideo&&!stopRequested&&active===stack){videoGate?.recover('reconnect');if(videoRecovery)clearTimeout(videoRecovery);status('视频通道正在重新连接');videoRecovery=setTimeout(()=>{status('视频通道恢复超时');shutdown()},8000)}})
   stack.on('session-ended',()=>{
    diagnostic('CarPlay会话结束',{connection:connectionId,wasActive:active===stack,videoReceived:hadVideo});
    sessions.delete(stack);const wasActive=active===stack;if(wasActive)active=undefined;stack.stop()
-   if(stopRequested||active&&!wasActive)return
+   if(stopRequested||!wasActive)return
    if(hadVideo){if(wasActive)shutdown();return}
    if(wasActive&&currentFps<=60){status('iPhone结束连接，未收到视频，请重新启动接收');shutdown()}
    else guard?.failed()
   })
-  stack.on('host-ui-requested',()=>send({type:'show-settings'}));stack.on('error',(error:any)=>{diagnostic('CarPlay协议错误',{connection:connectionId,...errorInfo(error)});status('CarPlay协议错误，请重新启动接收')})
-  stack.on('protocol-state',(stage:string,detail:string)=>status(stage,detail));stack.deviceFilter=id=>id.replace(/[^a-f0-9]/gi,'').toLowerCase()===cfg.targetBluetooth.replace(/[^a-f0-9]/gi,'').toLowerCase();
+  stack.on('connection-closed',()=>{sessions.delete(stack);controlSockets.delete(socket);controlConnections=controlSockets.size;if(active===stack)active=undefined;if(videoOwner===stack)videoOwner=undefined;if(!controlConnections&&!networkConfirmed&&!stopRequested)bonjour?.announce()})
+  stack.on('host-ui-requested',()=>{if(active===stack)send({type:'show-settings'})});stack.on('error',(error:any)=>{diagnostic('CarPlay协议错误',{connection:connectionId,...errorInfo(error)});if(!active||active===stack)status('CarPlay协议错误，请重新启动接收')})
+  stack.on('protocol-state',(stage:string,detail:string)=>{if(!active||active===stack)status(stage,detail)});stack.deviceFilter=id=>(!active||active===stack)&&id.replace(/[^a-f0-9]/gi,'').toLowerCase()===cfg.targetBluetooth.replace(/[^a-f0-9]/gi,'').toLowerCase();
   stack.attachSocket(socket)
  });server.on('error',error=>{if(!stopRequested){diagnostic('接收端监听失败',errorInfo(error));status('TCP17000接收端口不可用，请检查端口占用');shutdown()}});await new Promise<void>((resolve,reject)=>{server!.once('error',reject);server!.listen({port:17000,host:'::',ipv6Only:false},resolve)});if(stopRequested)return;status('网络接收端已就绪','TCP17000；IPv4/IPv6双栈监听；接入点标识：'+(cfg.wirelessMode==='lan'&&cfg.accessPointMac?'已提供':'使用接口标识'))
- bonjour=new Discovery(cfg.networkInterface,{deviceId,pk:identity.pkHex,pi:identity.pairingId,btMac:bt.adapter},cfg.targetBluetooth,()=>!!accessory?.authenticated&&!controlConnections&&!stopRequested,s=>send({type:'diagnostic',status:s}))
+ bonjour=new Discovery(cfg.networkInterface,{deviceId,pk:identity.pkHex,pi:identity.pairingId,btMac:bt.adapter},cfg.targetBluetooth,()=>!!accessory?.authenticated&&!networkConfirmed&&!stopRequested,s=>send({type:'diagnostic',status:s}))
  let stream:Duplex
- status('连接iPhone蓝牙RFCOMM服务');bluetooth=spawn(process.env.WINPLAY_NATIVE!,['bluetooth',cfg.targetBluetooth],{windowsHide:true});let bluetoothError='';bluetooth.stderr!.on('data',b=>bluetoothError=(bluetoothError+b).slice(-512));bluetooth.on('error',()=>{status('蓝牙桥接启动失败');shutdown()});bluetooth.on('exit',code=>{if(stopRequested||bluetoothReleased)return;if(!hadVideo&&code!==0){status('蓝牙RFCOMM连接失败',bluetoothError);shutdown()}})
+ status('连接iPhone蓝牙RFCOMM服务');bluetooth=spawn(process.env.WINPLAY_NATIVE!,['bluetooth',cfg.targetBluetooth],{windowsHide:true});let bluetoothError='';bluetooth.stderr!.on('data',b=>bluetoothError=(bluetoothError+b).slice(-512));bluetooth.on('error',()=>{status('蓝牙桥接启动失败');shutdown()});bluetooth.on('exit',code=>{if(stopRequested||bluetoothReleased||networkConfirmed)return;if(!hadVideo&&code!==0){status('蓝牙RFCOMM连接失败',bluetoothError);shutdown()}})
   let firstBluetoothData=true;stream=new Duplex({read(){},write(chunk,_encoding,cb){btSentBytes+=chunk.length;bluetooth!.stdin!.write(chunk,cb)}});bluetooth.stdout!.on('data',b=>{btReceivedBytes+=b.length;if(firstBluetoothData){firstBluetoothData=false;diagnostic('蓝牙首批数据到达',{bytes:b.length})}stream.push(b)});bluetooth.stdout!.on('end',()=>{diagnostic('蓝牙接收通道关闭',{btReceivedBytes,btSentBytes,released:bluetoothReleased});stream.push(null)});stream.on('close',()=>bluetooth?.kill());bluetooth.on('exit',(code,signal)=>diagnostic('蓝牙桥接退出',{exitCode:code,signal,released:bluetoothReleased,videoReceived:hadVideo,btReceivedBytes,btSentBytes}));
  const handoff={ssid:cfg.ssid,password:cfg.password,channel:cfg.channel,btMac:bt.adapter,apMac:accessPointIdentifier(cfg,nic.mac),host:nic.host,port:17000,pk:identity.pkHex,serial:'WINPLAY-'+identity.pairingId.toUpperCase()}
- let activeLink:IapLink;const accessories=new Set<Accessory>(),openLinks=new Set<IapLink>()
  status('网络发现：连接参数已准备/'+nic.family)
  handoffRecovery=new HandoffRecovery({alternateHost:nic.alternateHost,onFallback:host=>{
-  if(stopRequested||controlConnections||!accessory?.authenticated)return;
-  if(!openLinks.has(activeLink)){status('网络发现：蓝牙通道已关闭，保留原网络等待期限');return}
+  if(stopRequested||networkConfirmed||!bootstrapAccessory?.authenticated)return;
+  if(!openLinks.has(bootstrapAccessory.link)){status('网络发现：蓝牙通道已关闭，保留原网络等待期限');return}
   handoff.host=host;bonjour?.announce();status('正在切换CarPlay连接地址',nic.alternateFamily==='IPv6'?'改用IPv6重试；Windows网络设置保持不变。':'改用IPv4重试；Windows网络设置保持不变。');
-  accessory.startCarPlay().catch(()=>{if(!stopRequested&&!controlConnections)status('网络发现：备用连接参数未能发送，保留原网络等待期限')})
- },onWait:cfg.wirelessMode==='lan'?()=>{if(!stopRequested&&!controlConnections)status('仍在等待iPhone网络连接',networkWaitDetail)}:undefined})
- if(controlConnections)handoffRecovery.networkConnected()
- const bindAccessory=(link:IapLink,tunnel=false)=>{const previous=accessory;activeLink=link;openLinks.add(link);const current=new Accessory(link,signer,handoff);accessory=current;accessories.add(current)
+  bootstrapAccessory.startCarPlay(true).catch(()=>{if(!stopRequested&&!networkConfirmed)status('网络发现：备用连接参数未能发送，保留原网络等待期限')})
+ },onWait:cfg.wirelessMode==='lan'?()=>{if(!stopRequested&&!networkConfirmed)status('仍在等待iPhone网络连接',networkWaitDetail)}:undefined})
+ if(networkConfirmed)handoffRecovery.networkConnected()
+ const bindAccessory=(link:IapLink,tunnel=false)=>{const previous=accessory;activeLink=link;openLinks.add(link);const current=new Accessory(link,signer,handoff,{bootstrap:!tunnel,canStart:()=>!stopRequested&&!networkConfirmed});accessory=current;accessories.add(current);if(!tunnel)bootstrapAccessory=current
+  current.on('closed',()=>{openLinks.delete(link);accessories.delete(current)})
+  current.on('availability',available=>{if(!tunnel&&!available&&negotiations)handoffRecovery?.cancel()})
   current.on('status',s=>{if(!stopRequested&&accessory===current){status(s);if(tunnel&&current.authenticated){bluetoothReleased=true;previous?.close();bluetooth?.kill()}}});current.on('negotiation',()=>{if(!stopRequested&&accessory===current){
-   // The network iAP relay also negotiates after video has started.
-   // It must not restart handoff timers or replace an established state.
-   negotiations++;diagnostic('iAP参数协商完成',{transport:tunnel?'network':'bluetooth',negotiations,networkConnected:!!controlConnections,videoReceived:hadVideo});if(controlConnections)return;
+   negotiations++;diagnostic('iAP参数协商完成',{transport:tunnel?'network':'bluetooth',negotiations,networkConnected:networkConfirmed,videoReceived:hadVideo});if(tunnel||networkConfirmed)return;
    guard?.negotiationStarted();handoffRecovery?.negotiationStarted();bonjour?.announce();
    // Address retries and repeated iPhone requests must not extend a failed
    // network attempt indefinitely or disturb an already established session.
-   if(!controlConnections&&!networkDeadline)networkDeadline=setTimeout(()=>{if(!controlConnections&&!stopRequested){diagnostic('网络交接超时',bonjour?.summary()||{});status('iPhone网络连接超时',networkWaitDetail);shutdown()}},45000);
+   if(!networkConfirmed&&!networkDeadline)networkDeadline=setTimeout(()=>{if(!networkConfirmed&&!stopRequested){diagnostic('网络交接超时',bonjour?.summary()||{});status('iPhone网络连接超时',networkWaitDetail);shutdown()}},45000);
    if(currentFps<=60&&!videoDeadline)armVideoDeadline();
    status('已发送CarPlay参数，等待iPhone网络连接')
-  }});current.on('failed',s=>{if(accessory===current){status(s);shutdown()}})
+  }});current.on('failed',s=>{if(!tunnel&&networkConfirmed){diagnostic('蓝牙交接通道结束',{networkConnected:true});current.close();return}if(accessory===current){status(s);shutdown()}})
   link.on('transport-closed',()=>{openLinks.delete(link);if(accessory===current&&(tunnel||!current.authenticated))shutdown()});current.on('now-playing',p=>playing?.apply(p));link.on('file',b=>playing?.file(b));return current
  }
  playing=new NowPlaying((state,artChanged)=>send({type:'now-playing',state,artChanged}),b=>activeLink.send(b,12));bindAccessory(new IapLink(stream))

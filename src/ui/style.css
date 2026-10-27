@@ -11,6 +11,7 @@ nav{display:grid;gap:4px}
 .nav{width:100%;text-align:left;border:0;background:transparent;padding:9px 12px;display:flex;align-items:center;gap:10px}
 .nav svg{width:21px;height:21px;flex-shrink:0;color:var(--accent);fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .nav.active{background:var(--hover);font-weight:600}
+.donation-methods{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;padding:8px 0 16px}.donation-code{display:flex;flex-direction:column;align-items:center;gap:12px;padding:14px 10px;white-space:normal;min-width:0;background:var(--notice)}.donation-code>span:first-child{font-weight:600}.donation-code img{width:100%;height:200px;object-fit:contain}.donation-code .caption{padding:0}.donation-paypal{flex-wrap:wrap}#donation-dialog{padding:20px;border:1px solid var(--border);border-radius:12px;background:var(--card);color:var(--text);width:500px;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px)}#donation-dialog::backdrop{background:#0008}.donation-modal{display:flex;flex-direction:column;gap:16px}.donation-modal .row{flex-shrink:0}.donation-modal img{width:100%;height:min(560px,calc(100vh - 140px));object-fit:contain;min-height:0}
 .side-footer{margin-top:auto;padding:14px 10px 0;color:var(--muted);font-size:12px}
 .side-footer small{display:flex;gap:6px;margin-top:6px;font-size:11px}
 .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#9298a4;margin-right:7px}.dot.connected{background:#10a37f}

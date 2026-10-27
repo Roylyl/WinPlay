@@ -2,6 +2,21 @@
   'use strict';
   // Translate only application-owned phrases. Device names, media titles and raw logs stay untouched.
   const entries=[
+    ['捐赠','捐贈','Donate'],
+    ['关闭','關閉','Close'],
+    ['蓝牙交接通道已关闭，请选择60fps后重新启动接收。','藍牙交接通道已關閉，請選擇60fps後重新啟動接收。','The Bluetooth handoff channel is closed. Select 60fps and start the receiver again.'],
+    ['支持WinPlay','支持WinPlay','Support WinPlay'],
+    ['感谢你支持WinPlay的持续开发。','感謝你支持WinPlay的持續開發。','Thank you for supporting the continued development of WinPlay.'],
+    ['微信支付','微信支付','WeChat Pay'],
+    ['支付宝','支付寶','Alipay'],
+    ['点击放大','點擊放大','Click to enlarge'],
+    ['通过PayPal捐赠','透過PayPal捐贈','Donate with PayPal'],
+    ['微信支付，点击放大','微信支付，點擊放大','WeChat Pay, click to enlarge'],
+    ['支付宝，点击放大','支付寶，點擊放大','Alipay, click to enlarge'],
+    ['AlipayHK，点击放大','AlipayHK，點擊放大','AlipayHK, click to enlarge'],
+    ['微信支付收款码','微信支付收款碼','WeChat Pay QR code'],
+    ['支付宝收款码','支付寶收款碼','Alipay QR code'],
+    ['AlipayHK收款码','AlipayHK收款碼','AlipayHK QR code'],
     ['网络连接','網路連線','Network connection'],
     ['正在检测网络…','正在偵測網路…','Checking network…'],
     ['重新检测','重新偵測','Check again'],
