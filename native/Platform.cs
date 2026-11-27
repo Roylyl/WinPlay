@@ -50,6 +50,18 @@ class Platform {
   uint color=0xFFFFFFFE;
   borderResult=DwmSetWindowAttribute(window,34,ref color,4);
 
+  if(args.Length>=5&&args[4]=="strict"){
+   int width=int.Parse(args[2]),height=int.Parse(args[3]);
+   for(int attempt=0;attempt<2;attempt++){
+    Rect client,outer;
+    if(!GetClientRect(window,out client)||!GetWindowRect(window,out outer))break;
+    int dx=width-(client.right-client.left),dy=height-(client.bottom-client.top);
+    if(dx==0&&dy==0)break;
+    // Chromium clamps the size of a fixed window in WM_WINDOWPOSCHANGING.
+    // Skip that message for this pixel correction and keep WM_SIZE enabled.
+    if(!SetWindowPos(window,IntPtr.Zero,0,0,outer.right-outer.left+dx,outer.bottom-outer.top+dy,0x416))break;
+   }
+  }
   RedrawWindow(window,IntPtr.Zero,IntPtr.Zero,0x501);
   WindowMetrics(args);
  }
@@ -86,6 +98,10 @@ class Platform {
   if(count<0&&Volatile.Read(ref socketClosed)==0)throw new Exception("蓝牙接收失败，Windows错误码="+WSAGetLastError());
  }finally{close();WSACleanup();}}
  static int Main(string[] args){Console.OutputEncoding=new UTF8Encoding(false);try{if(args.Length==0)return 2;if(args[0]=="monitors"){Monitors();return 0;}if(args[0]=="window-frame"){WindowFrame(args);return 0;}if(args[0]=="window-metrics"){WindowMetrics(args);return 0;}if(args[0]=="window-pixels"){WindowPixels(args);return 0;}if(args[0]=="list"){List();return 0;}if(args[0]=="bluetooth"){Bluetooth(args[1]);return 0;}
+  if(args[0]=="wlan-current" && args.Length>=2 && (args[1]=="metadata" || args[1]=="credentials")){
+   Console.Write(new JavaScriptSerializer().Serialize(Wlan.Current(args.Length>2?args[2]:null,args[1]=="credentials")));
+   return 0;
+  }
   if(args[0]=="protect"||args[0]=="unprotect"){var m=new MemoryStream();Console.OpenStandardInput().CopyTo(m);var data=args[0]=="protect"?ProtectedData.Protect(m.ToArray(),null,DataProtectionScope.CurrentUser):ProtectedData.Unprotect(m.ToArray(),null,DataProtectionScope.CurrentUser);Console.OpenStandardOutput().Write(data,0,data.Length);return 0;}return 2;
  }catch(Exception e){Console.Error.Write(e.Message);return 1;}}
 }

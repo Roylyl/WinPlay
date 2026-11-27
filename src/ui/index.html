@@ -18,7 +18,7 @@
     <button class="nav" data-page="about"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v1"/></svg><span data-i18n="关于">关于</span></button>
     <button class="nav" data-page="donation"><svg viewBox="0 0 24 24"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8z"/></svg><span data-i18n="捐赠">捐赠</span></button>
   </nav>
-  <div class="side-footer"><span class="dot" id="side-dot"></span><span id="side-status" data-i18n="未连接">未连接</span><small><span data-i18n="版本">版本</span><span id="version">1.2.5</span></small></div>
+  <div class="side-footer"><span class="dot" id="side-dot"></span><span id="side-status" data-i18n="未连接">未连接</span><small><span data-i18n="版本">版本</span><span id="version">1.3.0</span></small></div>
 </aside>
 <main>
 <div class="settings-content">
@@ -28,15 +28,36 @@
   <div class="card">
     <div class="setting-row"><span data-i18n="状态">状态</span><span id="status" class="value" data-i18n="准备连接">准备连接</span></div>
     <p id="status-detail" class="caption result" data-i18n="配置无线网络后启动接收。">配置无线网络后启动接收。</p>
+    <div id="wireless-phone">
     <label class="setting-row"><span data-i18n="iPhone">iPhone</span><select id="targetBluetooth"><option value="" data-i18n="自动（上次连接的iPhone）">自动（上次连接的iPhone）</option></select></label>
     <div class="actions"><button id="refresh-bt" data-i18n="刷新iPhone列表">刷新iPhone列表</button></div>
     <p class="caption" data-i18n="自动模式优先使用上次成功显示画面的iPhone。">自动模式优先使用上次成功显示画面的iPhone。</p>
+    </div>
+    <div class="setting-row">
+      <span id="connection-label" data-i18n="连接方式">连接方式</span>
+      <div class="connection-segments" role="group" aria-labelledby="connection-label">
+        <button id="wired-mode" type="button" aria-pressed="false" data-i18n="有线CarPlay">有线CarPlay</button>
+        <button id="wireless-mode" type="button" aria-pressed="true" data-i18n="无线CarPlay">无线CarPlay</button>
+      </div>
+    </div>
+    <p id="connection-help" class="caption"></p>
   </div>
   <h2 class="section-title" data-i18n="应用">应用</h2>
   <div class="card">
     <label class="setting-row"><span data-i18n="语言">语言</span><select id="language"><option value="system" data-i18n="跟随系统">跟随系统</option><option value="zh-Hans">简体中文</option><option value="zh-Hant">繁體中文</option><option value="en">English</option></select></label>
+    <label class="setting-row"><span data-i18n="USB接入时自动启动CarPlay">USB接入时自动启动CarPlay</span><input type="checkbox" class="switch" role="switch" id="autoStartUsb"></label>
     <label class="setting-row"><span data-i18n="关闭主窗口时">关闭主窗口时</span><select id="closeBehavior"><option value="ask" data-i18n="每次询问">每次询问</option><option value="exit" data-i18n="退出WinPlay">退出WinPlay</option><option value="minimize" data-i18n="最小化到托盘">最小化到托盘</option></select></label>
     <label class="setting-row"><span data-i18n="外观">外观</span><select id="theme"><option value="system" data-i18n="跟随Windows">跟随Windows</option><option value="light" data-i18n="浅色">浅色</option><option value="dark" data-i18n="深色">深色</option></select></label>
+  </div>
+  <div id="wired-phone" hidden>
+    <h2 class="section-title" data-i18n="USB直连">USB直连</h2>
+    <div class="card">
+      <label class="setting-row"><span data-i18n="USB设备">USB设备</span><select id="targetUsb"></select></label>
+      <p id="wired-status" class="caption" role="status"></p>
+      <p id="wired-detail" class="caption result" hidden></p>
+      <div class="actions"><button id="refresh-wired" data-i18n="刷新USB设备">刷新USB设备</button></div>
+      <p class="caption" data-i18n="用数据线连接并解锁iPhone，首次连接时在手机上确认信任。">用数据线连接并解锁iPhone，首次连接时在手机上确认信任。</p>
+    </div>
   </div>
   <div id="wireless-fields">
     <h2 class="section-title" data-i18n="无线网络">无线网络</h2>
@@ -101,7 +122,7 @@
   <header><h1 data-i18n="关于">关于</h1></header>
   <h2 class="section-title" data-i18n="关于WinPlay">关于WinPlay</h2>
   <div class="card">
-    <div class="setting-row"><span data-i18n="版本">版本</span><span id="about-version" class="value">1.2.5</span></div>
+    <div class="setting-row"><span data-i18n="版本">版本</span><span id="about-version" class="value">1.3.0</span></div>
     <div class="setting-row"><span data-i18n="运行架构">运行架构</span><span id="architecture" class="value">x64</span></div>
     <div class="setting-row"><span data-i18n="开源许可">开源许可</span><span class="value">GPL-3.0-or-later</span></div>
     <div class="setting-row"><span data-i18n="项目主页">项目主页</span><button id="project-home" class="link-button">Roylyl/WinPlay ↗</button></div>

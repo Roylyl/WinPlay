@@ -21,6 +21,27 @@ function theme(dark){document.body.classList.toggle('dark',dark)}
 function fieldKey(key){return config.wirelessMode==='lan'?({ssid:'lanSsid',password:'lanPassword',channel:'lanChannel',networkInterface:'lanNetworkInterface'}[key]||key):key}
 function invalidateNetworkRead(key){++networkReadRequest;const field=fieldKey(key);networkEdits.set(field,(networkEdits.get(field)||0)+1);if(key==='networkInterface')++networkRequest}
 function bindNetworkEditing(){for(const key of ['ssid','password','channel','networkInterface','lanAccessPointMac'])for(const type of ['input','change'])$(key).addEventListener(type,()=>invalidateNetworkRead(key))}
+function renderWired(info={}){
+  const labels={idle:'等待检测USB设备',detecting:'正在检测iPhone…',ready:'已检测到iPhone','not-found':'未检测到iPhone',multiple:'检测到多台iPhone','driver-required':'USB网卡未就绪',error:'USB连接不可用'};
+  text('wired-status',labels[info.status]||labels.idle);
+  selected($('targetUsb'),(info.devices||[]).map(d=>({value:d.key,label:d.name+'（'+d.suffix+'）'})),config.targetUsb||'','自动（上次连接的iPhone）');
+  result('wired-detail',info.detail||'');
+  $('refresh-wired').disabled=info.status==='detecting';
+}
+function connectionFields(){
+  const isWired=config.connectionType==='wired';
+  $('wired-mode').setAttribute('aria-pressed',String(isWired));
+  $('wireless-mode').setAttribute('aria-pressed',String(!isWired));
+  $('wired-phone').hidden=!isWired;
+  $('wireless-phone').hidden=isWired;
+  $('wireless-fields').hidden=isWired;
+  text('connection-help',isWired?'通过USB数据线连接，无需填写Wi-Fi信息。':'通过蓝牙配对后使用Wi-Fi连接。');
+  if(!running&&!lastReceiverStatus)text('status-detail',isWired?'用数据线连接并解锁iPhone，首次连接时在手机上确认信任。':'配置无线网络后启动接收。');
+}
+async function refreshConnection(){
+  if(config.connectionType==='wired'){const reply=await call('wired-devices');if(reply.ok)renderWired(reply.wired);}
+  else await Promise.all([networks(),bluetooth()]);
+}
 function wirelessFields(){
   const lan=config.wirelessMode==='lan';$('wirelessMode').value=config.wirelessMode||'hotspot';
   text('wireless-help',lan?'Windows与iPhone连接同一路由器，电脑可使用Wi-Fi或网线，并完成蓝牙配对。访客网络、客户端隔离和企业认证可能阻止连接。':'在Windows设置中开启移动热点，点击“读取当前网络和密码”，并完成iPhone蓝牙配对。信道0表示自动。');
@@ -121,6 +142,7 @@ function renderUpdates(){
 function renderMediaFormat(){if(!mediaFormat)return;const o=mediaFormat;literal('actual-media-format',(o.codec==='pcm'?'PCM/16-bit':o.codec==='aac-lc'?'AAC-LC':o.codec.toUpperCase())+' · '+o.clockRate/1000+'kHz · '+formatText('{channels}声道',{channels:o.channels}))}
 function result(id,source,detail=''){text(id,source);const node=$(id);node._resultDetail=detail;if(detail)node.textContent+='\n'+resultDetail(detail);node.hidden=!source&&!detail}
 winplay.on(message=>{
+  if(message.type==='wired')renderWired(message.wired);
   if(message.type==='display-capabilities'&&config){++displayRequest;applyDisplayCapabilities(message)}
   if(message.type==='language'){locale=message.locale||locale;if(config){config.language=message.language||'system';$('language').value=config.language;applyLanguage()}}
   if(message.type==='updates'){updateState=message.updates||{};renderUpdates()}
@@ -145,10 +167,25 @@ winplay.on(message=>{
 });
 (async()=>{
   const r=await call('state');if(!r.ok)return;config=r.settings;config.language=config.language||'system';locale=r.locale||navigator.language;resolutionChoice=config.resolutionMode;updateState=r.updates||{};theme(r.dark);state(r.running);$('show-video').disabled=!(r.running&&r.stats?.decodedWidth);$('version').textContent=$('about-version').textContent=r.version;literal('architecture',r.architecture||'x64');
+  connectionFields();renderWired(r.wired);
+  const changeConnectionType=async mode=>{
+    if(mode===config.connectionType)return;
+    const saved=await save('connectionType',mode);
+    connectionFields();
+    if(saved.ok)await refreshConnection();
+  };
+  $('wired-mode').onclick=()=>changeConnectionType('wired');
+  $('wireless-mode').onclick=()=>changeConnectionType('wireless');
+  $('autoStartUsb').checked=config.autoStartUsb;
+  $('autoStartUsb').onchange=async()=>{
+    await save('autoStartUsb',$('autoStartUsb').checked);
+    $('autoStartUsb').checked=config.autoStartUsb;
+  };
+  $('refresh-wired').onclick=refreshConnection;
   for(const item of r.diagnostics||[])logs.push(diagnosticLine(item));renderLogs();text('auth-status',r.auth?'文件已就绪，等待iPhone验证':'缺少文件');
   bindNetworkEditing();
   for(const key of ['ssid','password','channel','fps','theme','closeBehavior','language']){$(key).value=config[fieldKey(key)];$(key).addEventListener('change',()=>save(fieldKey(key),['channel','fps'].includes(key)?Number($(key).value):$(key).value))}
-  for(const key of ['targetBluetooth','inputDevice','outputDevice'])$(key).addEventListener('change',()=>save(fieldKey(key),$(key).value));
+  for(const key of ['targetBluetooth','targetUsb','inputDevice','outputDevice'])$(key).addEventListener('change',()=>save(fieldKey(key),$(key).value));
   $('networkInterface').addEventListener('change',async()=>{await save(fieldKey('networkInterface'),$('networkInterface').value);await networks()});
   $('network-auto').onclick=async()=>{invalidateNetworkRead('networkInterface');await save(fieldKey('networkInterface'),'');await networks()};
   $('network-action').onclick=()=>call($('network-action').dataset.operation);
@@ -193,5 +230,5 @@ winplay.on(message=>{
   };
   $('collapse-sidebar').onclick=()=>document.body.classList.toggle('sidebar-collapsed');const resizer=$('sidebar-resizer');resizer.onpointerdown=e=>{resizer.setPointerCapture(e.pointerId);resizer.onpointermove=event=>{document.querySelector('aside').style.width=Math.max(150,Math.min(200,event.clientX))+'px'};resizer.onpointerup=()=>{resizer.onpointermove=null}};
   document.addEventListener('keydown',event=>{if(event.key!=='Enter'||event.defaultPrevented||event.ctrlKey||event.altKey||event.metaKey||$('receiver-footer').hidden||$('start').disabled)return;if(event.target.closest('button,select,summary')||event.target.matches('input[type=range],input[type=checkbox]'))return;event.preventDefault();event.target.blur?.();$('start').click()});
-  let refreshing=false;window.addEventListener('focus',async()=>{if(refreshing)return;refreshing=true;try{await Promise.all([networks(),displays(),audioDevices(),bluetooth()])}finally{refreshing=false}});applyLanguage();await Promise.all([networks(),displays(),audioDevices(),bluetooth()]);navigator.mediaDevices.addEventListener('devicechange',()=>audioDevices());
+  let refreshing=false;window.addEventListener('focus',async()=>{if(refreshing)return;refreshing=true;try{await Promise.all([refreshConnection(),displays(),audioDevices()])}finally{refreshing=false}});applyLanguage();await Promise.all([refreshConnection(),displays(),audioDevices()]);navigator.mediaDevices.addEventListener('devicechange',()=>audioDevices());
 })().catch(()=>toast('界面初始化失败，请重新打开WinPlay'));

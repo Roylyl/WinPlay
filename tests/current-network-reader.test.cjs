@@ -1,5 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict');
-const {createCurrentNetworkReader,parseResult}=require('../src/wlan-reader.cjs');
+const {createCurrentNetworkReader}=require('../src/wlan-reader.cjs');
 const {parseHotspotConfiguration}=require('../src/mobile-hotspot-reader.cjs');
 const hotspotSnapshot={sharingAvailable:false,tetheringState:'On',items:[{name:'Current hotspot',hotspot:true,virtualHotspot:true,downstreamReady:true,activeHotspot:true,hotspotSource:'winrt'}],recommended:{hotspot:'Current hotspot'}};
 
@@ -22,22 +22,22 @@ test('hotspot configuration stays readable while Off and partial failures do not
  assert.equal(parsed.ok,true);assert.equal(parsed.state,'Off');assert.equal(parsed.password,'public-hotspot-only');
 });
 
-test('current LAN password lookup uses the same interface and actual profile alias',async()=>{
+test('LAN reads credentials on the selected interface in the same snapshot',async()=>{
  const calls=[];
- const read=createCurrentNetworkReader({wlan:async(op,ssid,options)=>{
-  calls.push({op,ssid,options});
-  return op==='read-network'?{ok:true,ssid:'PUBLIC-LAN',profileName:'Public profile alias',interfaceName:'Wi-Fi 2',channel:44,bssid:'02:ab:00:00:00:04'}:{ok:true,password:'public-lan-only'};
+ const read=createCurrentNetworkReader({wlan:async options=>{
+  calls.push(options);
+  return {ok:true,ssid:'家庭网络',interfaceName:'Wi-Fi 2',channel:44,bssid:'02:ab:00:00:00:04',password:'public-lan-only'};
  },networks:async()=>{throw Error('LAN must not inspect hotspot configuration')}});
  const result=await read('lan',{interfaceName:'Wi-Fi 2'});
- assert.deepEqual(calls,[{op:'read-network',ssid:undefined,options:{interfaceName:'Wi-Fi 2'}},{op:'read-password',ssid:'PUBLIC-LAN',options:{interfaceName:'Wi-Fi 2',profileName:'Public profile alias'}}]);
- assert.deepEqual(result,{ok:true,mode:'lan',ssid:'PUBLIC-LAN',passwordRead:true,interfaceName:'Wi-Fi 2',channel:44,bssid:'02:AB:00:00:00:04',password:'public-lan-only'});
+ assert.deepEqual(calls,[{interfaceName:'Wi-Fi 2',includePassword:true}]);
+ assert.deepEqual(result,{ok:true,mode:'lan',ssid:'家庭网络',passwordRead:true,interfaceName:'Wi-Fi 2',channel:44,bssid:'02:AB:00:00:00:04',password:'public-lan-only'});
 });
 
-test('LAN metadata success with a password failure returns a partial result without credentials or raw error text',async()=>{
- const read=createCurrentNetworkReader({wlan:async op=>op==='read-network'?{ok:true,ssid:'PUBLIC-LAN',interfaceName:'Wi-Fi',channel:0}:{ok:false,error:'private-fixture must not escape'}});
+test('LAN metadata success with a password failure returns a partial result without credentials',async()=>{
+ const read=createCurrentNetworkReader({wlan:async()=>({ok:true,ssid:'PUBLIC-LAN',interfaceName:'Wi-Fi',channel:0})});
  const result=await read('lan');
  assert.equal(result.ok,true);assert.equal(result.passwordRead,false);assert.equal('password' in result,false);assert.equal('channel' in result,false);
- assert.match(result.warning,/已保存密码/);assert.equal(result.warning.includes('private-fixture'),false);
+ assert.match(result.warning,/已保存密码/);
 });
 
 test('configuration failures sanitize error text and never return an empty credential replacement',async()=>{
@@ -59,11 +59,6 @@ test('provided confirmed network snapshots avoid another OS enumeration; request
  const read=createCurrentNetworkReader({hotspot:async()=>{reads++;return {ok:true,ssid:'PUBLIC-HOTSPOT',password:'public-hotspot-only',state:'On'}},networks:async()=>{enumerations++;return hotspotSnapshot}});
  assert.equal((await read('hotspot',{snapshot:hotspotSnapshot})).interfaceName,'Current hotspot');assert.equal(enumerations,0);
  assert.equal((await read('invalid')).ok,false);assert.equal(reads,1);
-});
-
-test('netsh current-interface parsing preserves a profile alias independently of the SSID',()=>{
- const current=parseResult('read-network',Buffer.from('Name : Wi-Fi\nState : connected\nSSID : PUBLIC-LAN\nProfile : Public profile alias\nChannel : 36'),null);
- assert.equal(current.ssid,'PUBLIC-LAN');assert.equal(current.profileName,'Public profile alias');assert.equal(current.interfaceName,'Wi-Fi');
 });
 
 test('an observed active hotspot cannot be replaced with historical Off or transition credentials',()=>{

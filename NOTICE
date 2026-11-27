@@ -1,4 +1,4 @@
-WinPlay 1.2.5 — Roylyl
+WinPlay 1.3.0 — Roylyl
 GPL-3.0-or-later; see LICENSE.
 
 CarPlay control, pairing, encryption, plist and HID implementation adapted from
@@ -16,6 +16,9 @@ grant rights to authentication credentials.
 Electron (MIT), Chromium/FFmpeg and Node.js have their own bundled license texts.
 @noble/curves (MIT), multicast-dns (MIT), plist (MIT) retain their licenses.
 Wireless reception uses Windows Bluetooth and Wi-Fi; no Apple drivers are required.
+Wired reception uses the locally installed Apple device software and Windows
+USB networking. The Windows USB preparation approach references
+Peterinor/WinXPlay and Ezreal-byte/RustCarPlay.
 
 The WinPlay icon is adapted from the AndroidPlay/MacPlay icon design family:
 dark rounded tile, light-blue screen and play mark, with original CRT-style

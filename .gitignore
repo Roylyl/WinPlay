@@ -20,6 +20,29 @@
 # Generated validation output
 /docs/validation/
 
+# Native compiler output from local helper builds
+*.obj
+*.pdb
+*.ilk
+*.iobj
+*.ipdb
+/native/*.exp
+/native/*.lib
+/native/*.node
+
+# Local USB diagnostics and driver preparation state
+/.local/
+/WiredUsb/
+/usb-diagnostics/
+live-configs-*.json
+compat-mode4-*.json
+usb-descriptors*.json
+connection-check*.json
+connection-check-error*.txt
+video-window-check*.json
+window-smoke*.json
+window-failure*.txt
+
 # Authentication material and private keys
 /resources/authentication/
 *.pk8
@@ -29,15 +52,22 @@
 *.p12
 *.pfx
 *.dpapi
+*.dpapi.*
 
 # Local credentials, settings and pairing records
 .env
 .env.*
 !.env.example
 settings.json
+settings.json.*
 identity.json
+identity.json.*
 pairings.json
+pairings.json.*
 diagnostics.json
+diagnostics.json.*
+/data/
+/app-data/
 
 # Crash dumps, temporary files and editor/OS metadata
 *.dmp
@@ -54,10 +84,8 @@ diagnostics.json
 Thumbs.db
 Desktop.ini
 
-# Local agent instructions
-AGENTS.md
-
 # Local assistant/editor state
+AGENTS.md
 AGENTS.local.md
 CLAUDE.local.md
 /.claude/
@@ -78,9 +106,11 @@ CLAUDE.local.md
 /diagnostics/
 /logs/
 WinPlay-*-diagnostics*.json
+WinPlay-*-diagnostics*.zip
 codex-clipboard-*
 屏幕截图*.png
 屏幕截图*.jpg
+屏幕截图*.jpeg
 *.pcap
 *.pcapng
 *.etl

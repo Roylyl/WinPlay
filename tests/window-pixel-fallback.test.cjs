@@ -3,9 +3,10 @@ const source=fs.readFileSync(require.resolve('../src/main.cjs'),'utf8');
 function windowStub(){
  const calls=[],events=[];let bounds={x:80,y:60,width:800,height:630};
  const win={calls,events,resizable:false,destroyed:false,videoAspectRatio:16/9,
-  isDestroyed(){return this.destroyed},isMinimized:()=>false,
+  isDestroyed(){return this.destroyed},isMinimized:()=>false,videoSizingNative:null,
   getNativeWindowHandle:()=>({readBigUInt64LE:()=>123n}),
   setResizable(value){this.resizable=value;calls.push(['resizable',value])},
+  setAspectRatio(value){this.nativeRatio=value},
   getBounds:()=>({...bounds}),getContentSize:()=>[bounds.width,bounds.height-30],
   setContentSize(width,height){bounds={...bounds,width,height:height+30};calls.push(['content',width,height])},
   setBounds(value){bounds={...value};calls.push(['bounds',{...value}])},
@@ -21,7 +22,7 @@ function fixture(strictPixels=false){
   execFile:(_file,args,_options,callback)=>processes.push({args,callback}),
   log:(...args)=>logs.push(args),stop(){context.stops++}
  };
- vm.createContext(context);vm.runInContext(source.slice(source.indexOf('function setVideoPixels('),source.indexOf('// Apply one client-area ratio constraint')),context);
+ vm.createContext(context);vm.runInContext(source.slice(source.indexOf('function applyVideoFrame('),source.indexOf('function createVideo(')),context);
  return {context,win,processes,logs,start:()=>context.setVideoPixels()};
 }
 function failHelper(h,stage){
@@ -33,6 +34,7 @@ for(const stage of ['window-pixels','window-frame']){
   const h=fixture();h.start();assert.equal(h.context.videoSized,false);failHelper(h,stage);
   assert.equal(h.context.stops,0);assert.equal(h.context.videoSized,true);assert.equal(h.win.resizable,true);
   assert.deepEqual(h.win.getContentSize(),[960,540]);
+  assert.equal(h.win.nativeRatio,16/9);
   assert.ok(h.win.calls.some(([op,w,h])=>op==='content'&&w===960&&h===600));
   assert.ok(h.win.calls.some(([op])=>op==='show'));assert.ok(h.win.calls.some(([op])=>op==='focus'));
   assert.equal(h.win.events.length,1);assert.equal(h.win.events[0][1].type,'video-viewport');assert.equal(h.win.events[0][1].strictPixels,false);

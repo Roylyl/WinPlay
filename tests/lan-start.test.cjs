@@ -103,3 +103,13 @@ test('a hotspot state change while reading credentials prevents a stale handoff'
   await assert.rejects(r.context.start(),/Windows移动热点/);assert.equal(r.messages.length,0);assert.equal(r.context.running,false);
  }
 });
+
+test('manually entered Chinese SSID starts with native Unicode data or unavailable metadata',async()=>{
+ for (const current of [{ok:true,interfaceName:'Wi-Fi',ssid:'测试网络',channel:44},{ok:false}]) {
+  const r=receiver(async()=>current);
+  r.config.lanSsid='测试网络';
+  await r.context.start();
+  assert.equal(r.messages[0].settings.ssid,'测试网络');
+  assert.equal(r.messages[0].settings.password,'public-fixture');
+ }
+});

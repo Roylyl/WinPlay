@@ -1,5 +1,8 @@
 :root{color-scheme:light;--bg:#f5f6f8;--side:#eceff4;--card:#fff;--text:#25272c;--muted:#747984;--border:#e2e5ea;--hover:#e2e7ef;--accent:#0078d4;--on-accent:#fff;--notice:#f0f2f5}
 *{box-sizing:border-box}
+.connection-segments{display:inline-flex;gap:2px;padding:3px;border-radius:9px;background:var(--notice)}
+.connection-segments button{border:1px solid transparent;background:transparent;min-width:7.5em;border-radius:7px;padding:5px 9px}
+.connection-segments button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
 body.dark{color-scheme:dark;--bg:#1d212b;--side:#20283a;--card:#252a35;--text:#eceef3;--muted:#a2a7b2;--border:#343946;--hover:#3c4457;--notice:#2b303c}
 body{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 "Segoe UI","Microsoft YaHei UI",sans-serif;display:flex;height:100vh;overflow:hidden}
 aside{position:relative;width:165px;flex-shrink:0;background:var(--side);padding:12px 10px 18px;display:flex;flex-direction:column;border-right:1px solid var(--border)}
